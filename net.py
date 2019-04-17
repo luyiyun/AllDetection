@@ -58,7 +58,7 @@ class RetinaNet(nn.Module):
         super(RetinaNet, self).__init__()
         self.fpn = FPN(backbone)
         self.num_class = num_class
-        self.num_anchors = 9
+        self.num_anchors = num_anchors
         self.loc_head = self._make_head(self.num_anchors * 4)
         self.cls_head = self._make_head(self.num_anchors * self.num_class)
 

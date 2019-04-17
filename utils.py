@@ -72,8 +72,8 @@ def box_iou(box1, box2, order='xyxy'):
 
     area1 = (box1[:, 2] - box1[:, 0] + 1) * (box1[:, 3] - box1[:, 1] + 1)
     area2 = (box2[:, 2] - box2[:, 0] + 1) * (box2[:, 3] - box2[:, 1] + 1)
-
-    iou = inter / (area1[:, None] + area2 - inter)
+    # long的除法只是整除运算，必须先变成的float
+    iou = inter.float() / (area1[:, None] + area2 - inter).float()
     return iou
 
 
@@ -107,6 +107,14 @@ def box_nms(bboxes, scores, threshold=0.5, mode='union'):
 
         # 接下来的工作实际上就是计算和评分最高的bbox的IoU
         #   还有其他的mode，但可以考虑是否利用上面编写的iou函数
+        #   注意，这里order[1:]是#anchors x #class，x1是(#anchors)，
+        #   所以order[1:]中的每个值都作为x1的第一维坐标来得到x1的一个slice，
+        #   然后将这个slice放入到#anchors x #class的网格的每个格子中，因为x1只有
+        #   一维，则每个slice是一个scalar，所以得到的xx1的维度是#anchors x
+        #   #class，即是在每个分类上使用scores排序后的anchor的xmin坐标组成的
+        #   array（实际上，这个score是(#anchor)，因为是已经取过.max(1)的tensor，
+        #   所以order[1:]也是(#anchor)，所以xx1的维度是(#anchor)，如果是
+        #   #anchors x #class，则没法使用clamp，其只允许min或max是scalar）
         xx1 = x1[order[1:]].clamp(min=x1[i])
         yy1 = y1[order[1:]].clamp(min=y1[i])
         xx2 = x2[order[1:]].clamp(max=x2[i])
@@ -128,16 +136,9 @@ def box_nms(bboxes, scores, threshold=0.5, mode='union'):
     return torch.LongTensor(keep)
 
 
-class FocalLoss(nn.Module):
-    def __init__(self, num_class=2, alpha=0.25, gamma=2):
-        super(FocalLoss, self).__init__()
-        self.num_class = num_class
-        self.alpha = alpha
-        self.gamma = gamma
-        self.bce = nn.
-
-    def forward(self, pred, true):
-        pass
-
-    def focal_loss(self, x, y):
+def one_hot(labels, num_class, device=None):
+    y = torch.eye(num_class)
+    if device is not None:
+        y = y.to(device)
+    return y[labels]
 

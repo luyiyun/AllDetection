@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 import matplotlib.pyplot as plt
 
 from data_encoder import YEncoder
+from transfers import YTransfer
 
 
 def xml_to_markers(file_path):
@@ -66,40 +67,26 @@ def get_data_df(img_label_dir_pair, check=False):
     return pd.DataFrame(sample_files, columns=['img', 'label'])
 
 
-class YTransfer:
-    def __init__(self, y_encoder, input_size):
-        self.y_encoder = y_encoder
-        self.input_size = input_size
-
-    def __call__(self, labels, markers):
-        loc_targets, cls_targets = self.y_encoder.encode(
-            markers, labels, self.input_size)
-        return cls_targets, loc_targets
-
-
 class AllDetectionDataset(Dataset):
 
     def __init__(
         self, df, img_loader=pil_loader, label_mapper={'正常': 0, '异常': 1},
-        img_transfer=None, y_transfer=None
+        transfer=None
     ):
         self.img_loader = img_loader
         self.label_mapper = label_mapper
-        self.img_transfer = img_transfer
-        self.y_transfer = y_transfer
+        self.transfer = transfer
         self.df = df
 
     def __getitem__(self, idx):
         img_f, label_f = self.df.iloc[idx, :].values
         img = self.img_loader(img_f)
-        if self.img_transfer is not None:
-            img = self.img_transfer(img)
-        labels, postitions = xml_to_markers(label_f)
+        labels, markers = xml_to_markers(label_f)
         labels = torch.tensor([self.label_mapper[l] for l in labels])
-        postitions = torch.tensor(postitions, dtype=torch.float)
-        if self.y_transfer is not None:
-            labels, postitions = self.y_transfer(labels, postitions)
-        return img, labels, postitions
+        markers = torch.tensor(markers, dtype=torch.float)
+        if self.transfer is not None:
+            img, labels, markers = self.transfer(img, labels, markers)
+        return img, labels, markers
 
     def __len__(self):
         return len(self.df)
@@ -124,7 +111,7 @@ def main():
                 plt.show()
         else:
             y_transfer = YTransfer(YEncoder(), (224., 224.))
-            dataset = AllDetectionDataset(data_df, y_transfer=y_transfer)
+            dataset = AllDetectionDataset(data_df, transfer=y_transfer)
             img, labels, markers = dataset[1]
             print(labels.size())
             print(markers.size())

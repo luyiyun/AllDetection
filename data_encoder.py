@@ -11,7 +11,8 @@ class YEncoder:
         self, anchor_areas=[2. ** i for i in range(5, 10)],
         aspect_ratios=[1/2., 1/1., 1/1.],
         scale_ratios=[1., pow(2, 1/3.), pow(2, 2/3.)],
-        iou_thre=0.5, ignore_thres=(0.4, 0.5), nms_thre=0.5
+        iou_thre=0.5, ignore_thres=(0.4, 0.5), nms_thre=0.5,
+        input_size=None
     ):
         self.anchor_areas = anchor_areas
         self.aspect_ratios = aspect_ratios
@@ -19,11 +20,13 @@ class YEncoder:
         self.iou_thre = iou_thre
         self.ignore_thres = ignore_thres
         self.nms_thre = nms_thre
+        self.input_size = torch.tensor([input_size, input_size]) \
+            if isinstance(input_size, int) else torch.tensor(input_size)
         self.num_anchor_per_cell = len(aspect_ratios) * len(scale_ratios)
 
         self.anchor_wh = self._get_anchor_wh()
 
-    def encode(self, boxes, labels, input_size):
+    def encode(self, boxes, labels, input_size=None):
         '''
         编码xml中的object格式为bounding boxes regression的格式
         args:
@@ -37,8 +40,11 @@ class YEncoder:
             cls_targets: tensor，每个anchor被赋予的标签，size是[#anchors, ]，
                 其中的值0代表背景类，1-k表示k个分类，-1表示忽略的anchors
         '''
-        input_size = torch.tensor([input_size, input_size]) \
-            if isinstance(input_size, int) else torch.tensor(input_size)
+        if input_size is None:
+            input_size = self.input_size
+        else:
+            input_size = torch.tensor([input_size, input_size]) \
+                if isinstance(input_size, int) else torch.tensor(input_size)
         anchor_boxes = self._get_anchor_boxes(input_size)
         boxes = change_box_order(boxes, 'xyxy2xywh')
         # 计算每个anchor和每个gtbb间的iou，根据此来给标签
@@ -57,25 +63,31 @@ class YEncoder:
         cls_targets[ignore] = -1  # 这些anchors是不用的
         return loc_targets, cls_targets
 
-    def decode(self, loc_preds, cls_preds, input_size):
+    def decode(self, loc_preds, cls_preds, input_size=None):
         '''
         将网络的输出转化为正常的人们所能理解的标签和boxes
         '''
-        input_size = torch.tensor([input_size, input_size]) \
-            if isinstance(input_size, int) else torch.tensor(input_size)
+        # 根据图像的大小和anchor设定来计算出所有anchor的信息
+        if input_size is None:
+            input_size = self.input_size
+        else:
+            input_size = torch.tensor([input_size, input_size]) \
+                if isinstance(input_size, int) else torch.tensor(input_size)
         anchor_boxes = self._get_anchor_boxes(input_size)
-
+        # 取出预测的中心偏移量和宽高缩放量
         loc_xy = loc_preds[:, :2]
         loc_wh = loc_preds[:, 2:]
-
+        # 利用anchor的信息和bbr的效果（在每个anchor上需要再调整）来得到每个
+        #   最后的预测框的loc，并转换成xyxy mode
         xy = loc_xy * anchor_boxes[:, 2:] + anchor_boxes[:, :2]
         wh = loc_wh.exp() * anchor_boxes[:, 2:]
         boxes = torch.cat([xy - wh / 2, xy + wh / 2], 1)  # xyxy format
-
+        # 将preds进行sigmoid，变成概率，并去除那些得分（最大）比较低的框
         score, labels = cls_preds.sigmoid().max(1)
         ids = score > self.iou_thre
         ids = ids.nonzero().squeeze()  # [#obj, ]
         obj_boxes, obj_score = boxes[ids], score[ids]
+        # 再对剩下的预测框进行nms，得到的即是最后的结果
         keep = box_nms(obj_boxes, obj_score, threshold=self.nms_thre)
         return obj_boxes[keep], obj_score[keep]
 
