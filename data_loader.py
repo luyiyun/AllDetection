@@ -1,5 +1,6 @@
 import os
 import sys
+import ipdb
 
 import numpy as np
 import pandas as pd
@@ -84,6 +85,7 @@ class AllDetectionDataset(Dataset):
         labels, markers = xml_to_markers(label_f)
         labels = torch.tensor([self.label_mapper[l] for l in labels])
         markers = torch.tensor(markers, dtype=torch.float)
+        ipdb.set_trace()
         if self.transfer is not None:
             img, labels, markers = self.transfer(img, labels, markers)
         return img, labels, markers

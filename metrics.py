@@ -9,25 +9,25 @@ def mAP(
     true_cls, true_loc, pred_cls, pred_loc, iou_thre=0.5,
 ):
     '''
-    ¼ÆËãmAP
+    è®¡ç®—mAP
     args:
-        true_cls£¬tensor£¬(#imgs, #obj,)£¬ÖµÊÇ0,1,...£¬´ú±íÀà±ğ£»
-        true_loc£¬tensor£¬(#imgs, #obj, 4)£¬mode=xyxy£¬ÕæÊµµÄÃ¿¸öground truth
-            bounding boxesµÄ×ø±ê£»
-        pred_cls£¬tensor£¬(#imgs, #anchor_remain, #class)£¬Ã¿¸öÀàÔÚÃ¿¸öÔ¤²â
-            ¿òÉÏµÄµÃ·Ö£¬anchor_remain±íÊ¾ÕâÊÇ¾­¹ı¿¨ãĞÖµ¡¢nmsµÈÊ£ÏÂµÄÔ¤²â£»
-        pred_loc£¬tensor£¬(#imgs, #anchor_remain, 4)£¬mode=xyxy£¬Ô¤²âµÄ¿òµÄ
-            loc£»
-        iou_thre£¬iou_thre£¬Ä¬ÈÏÊÇ0.5£¬ÓÃÓÚÆ¥ÅäÔ¤²â¿òºÍgtbb£»
+        true_clsï¼Œtensorï¼Œ(#imgs, #obj,)ï¼Œå€¼æ˜¯0,1,...ï¼Œä»£è¡¨ç±»åˆ«ï¼›
+        true_locï¼Œtensorï¼Œ(#imgs, #obj, 4)ï¼Œmode=xyxyï¼ŒçœŸå®çš„æ¯ä¸ªground truth
+            bounding boxesçš„åæ ‡ï¼›
+        pred_clsï¼Œtensorï¼Œ(#imgs, #anchor_remain, #class)ï¼Œæ¯ä¸ªç±»åœ¨æ¯ä¸ªé¢„æµ‹
+            æ¡†ä¸Šçš„å¾—åˆ†ï¼Œanchor_remainè¡¨ç¤ºè¿™æ˜¯ç»è¿‡å¡é˜ˆå€¼ã€nmsç­‰å‰©ä¸‹çš„é¢„æµ‹ï¼›
+        pred_locï¼Œtensorï¼Œ(#imgs, #anchor_remain, 4)ï¼Œmode=xyxyï¼Œé¢„æµ‹çš„æ¡†çš„
+            locï¼›
+        iou_threï¼Œiou_threï¼Œé»˜è®¤æ˜¯0.5ï¼Œç”¨äºåŒ¹é…é¢„æµ‹æ¡†å’Œgtbbï¼›
     returns:
-        mAP£¬Êä³öµÄÊÇÒ»¸öfloatµÄscalar¡£
+        mAPï¼Œè¾“å‡ºçš„æ˜¯ä¸€ä¸ªfloatçš„scalarã€‚
     '''
-    # µÃµ½Í¼Æ¬ÊıºÍ·ÖÀàÊı
+    # å¾—åˆ°å›¾ç‰‡æ•°å’Œåˆ†ç±»æ•°
     num_imgs = true_cls.size(0)
     num_class = true_cls.max().item() + 1
-    # Ã¿Ò»ÕÅÍ¼Æ¬µÄÔ¤²â¿òºÍgtbb½øĞĞÆ¥Åä£¬ÕâÑù¸øÃ¿¸öÔ¤²â¿òµÄÃ¿¸öÀàÉÏÆ¥ÅäÒ»¸öĞÂµÄ
-    #   label£¬Èç¹ûÔ¤²â¿òºÍÄ³¸öÀàµÄgtbbµÄIoU³¬¹ı0.5ÔòÈÏÎª´Ë¿òÔÚ´ËÀàÉÏÊÇ1£¬·ñÔò
-    #   ÊÇ0£¬²¢½«²»Í¬Í¼Æ¬µÄÆ¥ÅäµÄ½á¹û¶¼concatµ½Ò»Æğ
+    # æ¯ä¸€å¼ å›¾ç‰‡çš„é¢„æµ‹æ¡†å’Œgtbbè¿›è¡ŒåŒ¹é…ï¼Œè¿™æ ·ç»™æ¯ä¸ªé¢„æµ‹æ¡†çš„æ¯ä¸ªç±»ä¸ŠåŒ¹é…ä¸€ä¸ªæ–°çš„
+    #   labelï¼Œå¦‚æœé¢„æµ‹æ¡†å’ŒæŸä¸ªç±»çš„gtbbçš„IoUè¶…è¿‡0.5åˆ™è®¤ä¸ºæ­¤æ¡†åœ¨æ­¤ç±»ä¸Šæ˜¯1ï¼Œå¦åˆ™
+    #   æ˜¯0ï¼Œå¹¶å°†ä¸åŒå›¾ç‰‡çš„åŒ¹é…çš„ç»“æœéƒ½concatåˆ°ä¸€èµ·
     true_cls_for_pred = []
     for i in range(num_imgs):
         t_cls = true_cls[i]
@@ -39,7 +39,7 @@ def mAP(
         t_cls_for_pred = match_matrix.mm(one_hot_t) > 0
         true_cls_for_pred.append(t_cls_for_pred)
     true_cls_for_pred = torch.cat(true_cls_for_pred, dim=0)
-    # È»ºó¼ÆËãÃ¿¸öÀàÉÏµÄAP(sklearn)£¬²¢½øĞĞÆ½¾ù£¨Ê¹ÓÃaverage=macro£©
+    # ç„¶åè®¡ç®—æ¯ä¸ªç±»ä¸Šçš„AP(sklearn)ï¼Œå¹¶è¿›è¡Œå¹³å‡ï¼ˆä½¿ç”¨average=macroï¼‰
     pred_cls = pred_cls.cpu().numpy()
     true_cls_for_pred = true_cls_for_pred.cpu().numpy()
     mAP = average_precision_score(
