@@ -151,7 +151,8 @@ def main():
     # 命令行参数设置
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        'save', default='exam', help='保存的本次训练的文件夹的名称，默认是exam')
+        'save', default='exam', nargs='?',
+        help='保存的本次训练的文件夹的名称，默认是exam')
     parser.add_argument(
         '-sr', '--save_root', default='./results',
         help='结果保存的根目录，默认是./results'
@@ -189,7 +190,7 @@ def main():
     # 数据集分割
     trainval_df, test_df = train_test_split(
         data_df, test_size=0.1, shuffle=True, random_state=args.random_seed)
-    train_df, valid_df, test_df = train_test_split(
+    train_df, valid_df = train_test_split(
         trainval_df, test_size=1/9, shuffle=True, random_state=args.random_seed
     )
 
@@ -229,7 +230,9 @@ def main():
     net.cuda()
     criterion = FocalLoss()
     optimizer = optim.SGD(
-        net.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
+        net.parameters(), lr=args.learning_rate,
+        momentum=0.9, weight_decay=1e-4
+    )
     lr_schedular = None
 
     # 模型训练
@@ -245,3 +248,6 @@ def main():
     state_dict = copy.deepcopy(net.state_dict())
     torch.save(state_dict, os.path.join(save_dir, 'model.pth'))
 
+
+if __name__ == "__main__":
+    main()
