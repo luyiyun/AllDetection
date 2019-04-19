@@ -1,6 +1,8 @@
 import os
 import copy
 
+import numpy as np
+import pandas as pd
 import torch
 import torch.utils.data as data
 import torch.optim as optim
@@ -10,7 +12,6 @@ import argparse
 import progressbar as pb
 
 from data_loader import get_data_df, AllDetectionDataset
-from data_encoder import YEncoder
 import transfers
 from net import RetinaNet
 from losses import FocalLoss
@@ -24,9 +25,11 @@ def train(
     # 训练开始的时候需要初始化的一些值
     history = {
         'loss': [], 'cls_loss': [], 'loc_loss': [],
-        'val_loss': [], 'val_cls_loss': [], 'val_loc_loss': []
+        'val_loss': [], 'val_cls_loss': [], 'val_loc_loss': [],
+        'mAP': []
     }
     best_loss = float('inf')
+    best_map = 0.
     best_model_wts = copy.deepcopy(net.state_dict())
     for e in range(epoch):
         if 'valid' in dataloaders.keys():
@@ -53,19 +56,38 @@ def train(
                 net.eval()
                 iterator = dataloaders[phase]
             # 进行一个epoch中所有batches的迭代
+            y_encoder = dataloaders[phase].dataset.y_encoder
+            all_label_preds = []
+            all_marker_preds = []
+            all_label_trues = []
+            all_marker_trues = []
             for imgs, labels, markers in iterator:
                 imgs = imgs.cuda()
-                labels = labels.cuda()
-                markers = markers.cuda()
+                if phase == 'train':
+                    cls_trues = labels.cuda()
+                    loc_trues = markers.cuda()
+                else:
+                    labels, cls_trues = labels
+                    cls_trues = cls_trues.cuda()
+                    markers, loc_trues = markers
+                    loc_trues = loc_trues.cuda()
+
                 if phase == 'train':
                     optimizer.zero_grad()
-                with torch.set_grad_enable(phase == 'train'):
+                with torch.set_grad_enabled(phase == 'train'):
                     cls_preds, loc_preds = net(imgs)
                     loss, cls_loss, loc_loss = criterion(
-                        labels, cls_preds, markers, loc_preds)
+                        cls_trues, loc_trues, cls_preds, loc_preds)
                     if phase == 'train':
                         loss.backward()
                         optimizer.step()
+                    else:
+                        label_preds, marker_preds = y_encoder.decode(
+                            cls_preds, loc_preds)
+                        all_label_preds.extend(label_preds)
+                        all_marker_preds.extend(marker_preds)
+                        all_label_trues.extend(labels)
+                        all_marker_trues.extend(markers)
                 with torch.no_grad():
                     epoch_loss += loss.item()
                     epoch_cls_loss += cls_loss.item()
@@ -80,71 +102,93 @@ def train(
                     history['loss'].append(epoch_loss)
                     history['cls_loss'].append(epoch_cls_loss)
                     history['loc_loss'].append(epoch_loc_loss)
+                    print(
+                        '%s, loss: %.4f, cls_loss: %.4f, loc_loss: %.4f' %
+                        (phase, epoch_loss, epoch_cls_loss, epoch_loc_loss)
+                    )
                 elif phase == 'valid':
+                    map_score = mAP(
+                        all_label_trues, all_marker_trues,
+                        all_label_preds, all_marker_preds)
                     history['val_loss'].append(epoch_loss)
                     history['val_cls_loss'].append(epoch_cls_loss)
                     history['val_loc_loss'].append(epoch_loc_loss)
+                    history['mAP'].append(map_score)
                     if epoch_loss < best_loss:
                         best_loss = epoch_loss
                         best_model_wts = copy.deepcopy(net.state_dict())
-            print(
-                '%s, loss: %.4f, cls_loss: %.4f, loc_loss: %.4f' %
-                (phase, epoch_loss, epoch_cls_loss, epoch_loc_loss)
-            )
+                        best_map = map_score
+                    print(
+                        ('%s, loss: %.4f, cls_loss: %.4f,'
+                         ' loc_loss: %.4f, mAP: %.4f') %
+                        (
+                            phase, epoch_loss, epoch_cls_loss,
+                            epoch_loc_loss, map_score
+                        )
+                    )
 
     net.load_state_dict(best_model_wts)
-    print('valid best loss: %.4f' % (best_loss))
+    print('valid best loss: %.4f, best mAP: %.4f' % (best_loss, best_map))
 
     # 如果有test，则再进行test的预测
     if 'test' in dataloaders.keys():
-        y_encoder = dataloaders['train'].dataset.transfer.\
-            transforms[-1].y_encoder
         _, test_loss, test_map = test(
-            net, dataloaders['test'], y_encoder, criterion=criterion)
+            net, dataloaders['test'], criterion=criterion)
+        print('test loss: %.4f, test mAP: %.4f' % (test_loss, test_map))
         return history, (test_loss, test_map)
 
     return history
 
 
-def test(net, dataloader, data_encoder, criterion=None, evaluate=True):
+def test(net, dataloader, criterion=None, evaluate=True):
     assert evaluate and criterion is not None
     print('Testing ...')
+    data_encoder = dataloader.dataset.y_encoder
     with torch.no_grad():
         all_loss = 0.
-        all_cls_preds = []
-        all_loc_preds = []
-        all_cls_trues = []
-        all_loc_trues = []
+        all_labels_pred = []
+        all_markers_pred = []
+        all_labels_true = []
+        all_markers_true = []
         for imgs, labels, markers in dataloader:
             imgs = imgs.cuda()
-            labels = labels.cuda()
-            markers = markers.cuda()
+            if isinstance(labels, tuple):
+                labels, cls_trues = labels
+                cls_trues = cls_trues.cuda()
+                markers, loc_trues = markers
+                loc_trues = loc_trues.cuda()
+            elif isinstance(labels, list):
+                raise NotImplementedError
+            else:
+                cls_trues = labels.cuda()
+                loc_trues = markers.cuda()
             cls_preds, loc_preds = net(imgs)
-            cls_preds, loc_preds = data_encoder.decode(cls_preds, loc_preds)
             if evaluate or criterion is not None:
-                loss = criterion(labels, markers, cls_preds, loc_preds)
+                loss, _, _ = criterion(
+                    cls_trues, loc_trues, cls_preds, loc_preds)
                 all_loss += loss.item()
-            all_cls_preds.append(cls_preds)
-            all_loc_preds.append(loc_preds)
+            # 使用decode得到的是list，其每个元素是batch中每个图片的预测框的
+            #   tensor
+            label_preds, marker_preds = data_encoder.decode(
+                cls_preds, loc_preds)
+            all_markers_pred.extend(marker_preds)
+            all_labels_pred.extend(label_preds)
             if evaluate:
-                all_cls_trues.append(labels)
-                all_loc_trues.append(markers)
-        all_cls_preds = torch.cat(all_cls_preds, dim=0)
-        all_loc_preds = torch.cat(all_loc_preds, dim=0)
-        if evaluate:
-            all_cls_trues = torch.cat(all_cls_trues, dim=0)
-            all_loc_trues = torch.cat(all_loc_trues, dim=0)
+                all_labels_true.extend(labels)
+                all_markers_true.extend(markers)
 
         if evaluate or criterion is not None:
             mean_loss = all_loss / len(dataloader.dataset)
         if evaluate:
+            # 现在输入的all_..._trues是batch x #anchor
             map_score = mAP(
-                all_cls_trues, all_loc_trues, all_cls_preds, all_loc_preds)
-            return (all_cls_preds, all_loc_preds), mean_loss, map_score
+                all_labels_true, all_markers_true,
+                all_labels_pred, all_markers_pred)
+            return (all_labels_pred, all_markers_pred), mean_loss, map_score
         elif criterion is not None:
-            return (all_cls_preds, all_loc_preds), mean_loss
+            return (all_labels_pred, all_markers_pred), mean_loss
         else:
-            return all_cls_preds, all_loc_preds
+            return all_labels_pred, all_markers_pred
 
 
 def main():
@@ -162,8 +206,8 @@ def main():
     parser.add_argument(
         '-nj', '--n_jobs', default=4, type=int, help='多核并行的核数，默认是4')
     parser.add_argument(
-        '-is', '--input_size', default=(600, 960), type=int, nargs=2,
-        help='模型接受的输入的大小，需要指定两个，默认是(600, 960)'
+        '-is', '--input_size', default=(960, 600), type=int, nargs=2,
+        help='模型接受的输入的大小，需要指定两个，即宽x高，默认是(960, 600)'
     )
     parser.add_argument(
         '-lr', '--learning_rate', type=float, default=1e-3,
@@ -195,33 +239,39 @@ def main():
     )
 
     # 数据集建立
-    data_augment = transforms.Compose([
+    data_augment = transfers.MultiCompose([
         transfers.RandomFlipLeftRight(),
         transfers.RandomFlipTopBottom(),
-        transfers.Resize(args.input_size)
     ])
+    # 注意对于PIL，其输入大小时是w,h的格式
+    resize_transfer = transfers.Resize(args.input_size)
     img_transfer = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
     ])
     img_transfer = transfers.OnlyImage(img_transfer)
-    y_encoder = YEncoder(input_size=args.input_size)
-    y_transfer = transfers.YTransfer(y_encoder)
-    train_transfers = transforms.Compose([
-        data_augment, img_transfer, y_transfer
+    train_transfers = transfers.MultiCompose([
+        data_augment, resize_transfer, img_transfer
     ])
-    test_transfers = transforms.Compose([
-        img_transfer, y_transfer
+    test_transfers = transfers.MultiCompose([
+        resize_transfer, img_transfer
     ])
     datasets = {
-        'train': AllDetectionDataset(train_df, transfer=train_transfers),
-        'valid': AllDetectionDataset(valid_df, transfer=test_transfers),
-        'test': AllDetectionDataset(test_df, transfer=test_transfers)
+        'train': AllDetectionDataset(
+            train_df, transfer=train_transfers, y_encoder_mode='anchor',
+            input_size=(600, 960)),
+        'valid': AllDetectionDataset(
+            valid_df, transfer=test_transfers,
+            y_encoder_mode='all', input_size=(600, 960)
+        ),
+        'test': AllDetectionDataset(
+            test_df, transfer=test_transfers, y_encoder_mode='all',
+            input_size=(600, 960))
     }
     dataloaders = {
         k: data.DataLoader(
             v, batch_size=args.batch_size, shuffle=False,
-            num_workers=args.n_jobs)
+            num_workers=args.n_jobs, collate_fn=v.collate_fn)
         for k, v in datasets.items()
     }
 
@@ -242,11 +292,17 @@ def main():
     )
 
     # 模型保存
-    save_dir = os.path.join(args.root_dir, args.save)
+    save_dir = os.path.join(args.save_root, args.save)
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
     state_dict = copy.deepcopy(net.state_dict())
     torch.save(state_dict, os.path.join(save_dir, 'model.pth'))
+    test_res = np.asarray([test_loss, test_map])
+
+    np.savetxt(os.path.join(save_dir, 'test.txt'), test_res)
+
+    train_df = pd.DataFrame(history)
+    train_df.to_csv(os.path.join(save_dir, 'train.csv'))
 
 
 if __name__ == "__main__":

@@ -10,13 +10,17 @@ class YTransfer:
         self.input_size = input_size
 
     def __call__(self, img, labels, markers):
-        loc_targets, cls_targets = self.y_encoder.encode(
-            markers, labels, self.input_size)
+        cls_targets, loc_targets = self.y_encoder.encode(
+            labels, markers, self.input_size)
         return img, cls_targets, loc_targets
 
 
 class Resize:
     def __init__(self, size, max_size=1500):
+        '''
+        args:
+            size：图片的大小，如果是tuple则指的是(w, h)
+        '''
         self.size = size
         self.max_size = max_size
 
@@ -78,4 +82,14 @@ class OnlyImage:
     def __call__(self, img, labels, markers):
         img = self.transfer(img)
         return img, labels, markers
+
+
+class MultiCompose:
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, *args):
+        for t in self.transforms:
+            args = t(*args)
+        return args
 

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from utils import one_hot
 
@@ -11,9 +12,8 @@ class FocalLoss(nn.Module):
         self.alpha = alpha
         self.gamma = gamma
         self.smooth_l1_loss = nn.SmoothL1Loss(reduction='sum')
-        self.bce_with_logits = nn.BCEWithLogitsLoss(reduction='sum')
 
-    def forward(self, cls_targets, cls_preds, loc_targets, loc_preds):
+    def forward(self, cls_targets, loc_targets, cls_preds, loc_preds):
         batch_size, num_boxes = cls_targets.size()
         # 0是背景类，1是要忽略的anchors，得到[N, #anchors]的boolean
         pos = cls_targets > 0
@@ -40,7 +40,7 @@ class FocalLoss(nn.Module):
 
     def focal_loss(self, x, y):
         # 这样做，使得背景anchor的标签是[0,0]，两类的标签是[0,1]和[1,0]
-        t = one_hot(y.data, 1+self.num_class)
+        t = one_hot(y.data, 1+self.num_class, device=torch.device('cuda:0'))
         t = t[:, 1:]
         # 使用sigmoid值，则相当于对于每一anchor，每一个类和背景类作logistic，
         #   自然此分数可以认为是这一类相对于背景类的得分，而在决定使用那一类作
@@ -50,7 +50,8 @@ class FocalLoss(nn.Module):
         pt = p * t + (1 - p) * (1 - t)
         w = self.alpha * t + (1 - self.alpha) * t
         w = w * (1 - pt).pow(self.gamma)
-        return self.bce_with_logits(x, t, w)
+        return F.binary_cross_entropy_with_logits(
+            x, t, w.detach(), reduction='sum')
 
     def focal_loss_alt(self, x, y):
         # 这样做，使得背景anchor的标签是[0,0]，两类的标签是[0,1]和[1,0]

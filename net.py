@@ -50,7 +50,8 @@ class FPN(nn.Module):
         对x进行上采样到y的大小，并和有相加
         '''
         _, _, H, W = y.size()
-        return F.upsample(x, size=(H, W), mode='bilinear') + y
+        return F.interpolate(
+            x, size=(H, W), mode='bilinear', align_corners=True) + y
 
 
 class RetinaNet(nn.Module):
