@@ -68,6 +68,7 @@ def box_iou(box1, box2, order='xyxy'):
     lt = torch.max(box1[:, None, :2], box2[:, :2])
     rb = torch.min(box1[:, None, 2:], box2[:, 2:])
     wh = (rb - lt + 1).clamp(min=0)  # ????
+    # 这里也可以使用方法prod(dim=2)，但测试其速度慢一点
     inter = wh[:, :, 0] * wh[:, :, 1]
 
     area1 = (box1[:, 2] - box1[:, 0] + 1) * (box1[:, 3] - box1[:, 1] + 1)

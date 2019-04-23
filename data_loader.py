@@ -1,5 +1,6 @@
 import os
 import sys
+import platform
 
 import numpy as np
 import pandas as pd
@@ -12,10 +13,17 @@ from torch.utils.data.dataloader import default_collate
 import matplotlib.pyplot as plt
 
 from data_encoder import YEncoder
-from transfers import YTransfer
 
 
 def xml_to_markers(file_path):
+    '''
+    从xml文件中读取标签和位置信息，这一个xml文件是对一张图片的标记信息；
+    args:
+        file_path，xml文件的路径；
+    returns:
+        labels，list，每个元素是这一张图片所有的objs的标签，字符串；
+        postitions，list，每个元素是一个4-list，为xyxy格式，int；
+    '''
     postition_tag = ['xmin', 'ymin', 'xmax', 'ymax']
     et = ET.parse(file_path)
     root = et.getroot()
@@ -31,18 +39,27 @@ def xml_to_markers(file_path):
 
 
 def pil_loader(img_f):
+    '''
+    使用PIL来读取图像
+    args:
+        img_f，图像文件的路径；
+    returns:
+        Image，返回的是PIL的Image对象；
+    '''
     return Image.open(img_f)
 
 
-def draw_rectangle(img, labels, markers, color_mapper={0: 'green', 1: 'red'}):
-    draw = Draw(img)
-    for label, marker in zip(labels, markers):
-        color = color_mapper[label]
-        draw.rectangle(marker.tolist(), outline=color, width=5)
-    return img
-
-
 def _check(name, label_f, img_dir):
+    '''
+    对标记文件的集合和图像文件的集合进行检查，看是否能够完全对上，如果对不上，
+        则返回错误；
+    args:
+        name，图像的文件名列表；
+        label_f，xml文件的文件名列表；
+        img_dir，所在的文件夹路径；
+    returns:
+        None
+    '''
     img_set = set(name)
     label_set = set([f[:-4] for f in label_f])
     symmetric_difference = img_set.symmetric_difference(label_set)
@@ -53,6 +70,16 @@ def _check(name, label_f, img_dir):
 
 
 def get_data_df(img_label_dir_pair, check=False):
+    '''
+    得到一个DataFrame，储存有图片和标签文件的对应信息；
+    args:
+        img_label_dir_pair，其是一个list，每个元素是一个2-tuple，是两个文件夹路
+            径，前一个是储存有图片的文件夹路径，后一个是储存有相应标签的文件夹
+            路径，可能有多个这样的文件夹pair；
+        check，是否对文件夹pair间的文件名进行检查，看标签和图像间是否对的上；
+    returns:
+        df
+    '''
     sample_files = []
     for img_dir, label_dir in img_label_dir_pair:
         names = []
@@ -69,13 +96,14 @@ def get_data_df(img_label_dir_pair, check=False):
 
 
 class AllDetectionDataset(Dataset):
-
+    '''
+    建立用于RetinaNet训练的数据集
+    '''
     def __init__(
         self, df, img_loader=pil_loader, label_mapper={'正常': 0, '异常': 1},
-        transfer=None, y_encoder_mode=True, **kwargs
+        transfer=None, y_encoder_mode='object', **kwargs
     ):
         '''
-        建立用于RetinaNet训练的数据集
         args:
             df：使用的图片文件路径和xml文件路径组成的2-columns的df；
             img_loader：读取图片文件的loader，方式；
@@ -94,9 +122,20 @@ class AllDetectionDataset(Dataset):
         self.transfer = transfer
         self.df = df
         self.y_encoder_mode = y_encoder_mode
+        # 这里隐式的创建YEncoder来对obj进行关于anchor的编码
         self.y_encoder = YEncoder(**kwargs)
 
     def __getitem__(self, idx):
+        '''
+        dataset标准方法，
+        returns:
+            img，返回的图像对象，如果没有transfer，则返回的就是PIL的Image对象；
+            labels, cls_targets，这里视y_encoder_mode的值来返回不同的结果，如果
+                是anchor，则只返回cls_targts（即编码后的在anchors水平上的标签和
+                位置偏移量），如果是object则返回labels（原始的obj的标签和labels
+                ），只是把标签给数值化；
+            markers, loc_targets，同上；
+        '''
         img_f, label_f = self.df.iloc[idx, :].values
         img = self.img_loader(img_f)
         labels, markers = xml_to_markers(label_f)
@@ -113,9 +152,17 @@ class AllDetectionDataset(Dataset):
         return img, labels, markers
 
     def __len__(self):
+        '''
+        图像的数量
+        '''
         return len(self.df)
 
     def collate_fn(self, batch):
+        '''
+        因为在不同y_encode_mode下后返回不同类型的结果，比如tensor和list，为了
+            能够在合并成batch的时候区别对待，这里编写一个collate_fn用于dataloader
+            的collate_fn参数，用于怎么把单个sample合并成batch；
+        '''
         if self.y_encoder_mode == 'anchor':
             return default_collate(batch)
         elif self.y_encoder_mode == 'object':
@@ -136,30 +183,47 @@ class AllDetectionDataset(Dataset):
             )
 
 
-def main():
-        root_dir = '/home/dl/deeplearning_img/AllDet/label_boxes'
-        img_label_dir_pair = []
-        for d in os.listdir(root_dir):
-            img_dir = os.path.join(root_dir, d)
-            label_dir = os.path.join(root_dir, d, 'outputs')
-            img_label_dir_pair.append((img_dir, label_dir))
-
-        data_df = get_data_df(img_label_dir_pair, check=True)
-        if len(sys.argv) == 1:
-            dataset = AllDetectionDataset(data_df)
-            for i in range(len(dataset)):
-                img, labels, markers = dataset[i]
-                print(markers)
-                img = draw_rectangle(img, labels.numpy(), markers.numpy())
-                fig, ax = plt.subplots(figsize=(20, 10))
-                ax.imshow(np.asarray(img))
-                plt.show()
+def draw_rectangle(img, labels, markers, color_mapper={0: 'green', 1: 'red'}):
+    draw = Draw(img)
+    # font = ImageFont.truetype(font="C:/Windows/Fonts/Calibar", size=5)
+    for label, marker in zip(labels, markers):
+        if labels.ndim == 1:
+            color = color_mapper[label]
         else:
-            dataset = AllDetectionDataset(
-                data_df, y_encoder_mode='all', input_size=(1200, 1920))
-            img, labels, markers = dataset[1]
-            print(labels)
+            color = color_mapper[label.argmax()]
+            text_position = (marker[[0, 2]].mean(), marker[[1, 3]].mean())
+            draw.text(text_position, str(label.max()), fill=color)
+        draw.rectangle(marker.tolist(), outline=color, width=5)
+    return img
+
+
+def main():
+    if platform.system() == 'Windows':
+        root_dir = 'E:/Python/AllDetection/label_boxes'
+    else:
+        root_dir = '/home/dl/deeplearning_img/AllDet/label_boxes'
+    img_label_dir_pair = []
+    for d in os.listdir(root_dir):
+        img_dir = os.path.join(root_dir, d)
+        label_dir = os.path.join(root_dir, d, 'outputs')
+        img_label_dir_pair.append((img_dir, label_dir))
+
+    data_df = get_data_df(img_label_dir_pair, check=True)
+    if len(sys.argv) == 1:
+        dataset = AllDetectionDataset(data_df, input_size=(1200, 1920))
+        for i in range(len(dataset)):
+            img, labels, markers = dataset[i]
             print(markers)
+            img = draw_rectangle(img, labels.numpy(), markers.numpy())
+            fig, ax = plt.subplots(figsize=(20, 10))
+            ax.imshow(np.asarray(img))
+            plt.show()
+    else:
+        dataset = AllDetectionDataset(
+            data_df, y_encoder_mode='all', input_size=(1200, 1920))
+        img, labels, markers = dataset[1]
+        print(labels)
+        print(markers)
 
 
 if __name__ == "__main__":

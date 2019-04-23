@@ -1,8 +1,14 @@
+import sys
+import os
+import platform
+
+import numpy as np
 import torch
-from PIL import Image, ImageDraw
 from sklearn.metrics import average_precision_score
+import matplotlib.pyplot as plt
 
 from utils import box_iou, one_hot
+from data_loader import get_data_df, AllDetectionDataset, draw_rectangle
 
 
 def mAP(true_cls, true_loc, pred_cls, pred_loc, iou_thre=0.5, num_class=2):
@@ -33,7 +39,7 @@ def mAP(true_cls, true_loc, pred_cls, pred_loc, iou_thre=0.5, num_class=2):
         t_loc = true_loc[i].cuda()
         p_loc = pred_loc[i]
         iou_matrix = box_iou(p_loc, t_loc)
-        match_matrix = (iou_matrix > 0.5).float()
+        match_matrix = (iou_matrix > iou_thre).float()
         one_hot_t = one_hot(t_cls, num_class).cuda().float()
         t_cls_for_pred = match_matrix.mm(one_hot_t) > 0
         true_cls_for_pred.append(t_cls_for_pred)
@@ -41,9 +47,15 @@ def mAP(true_cls, true_loc, pred_cls, pred_loc, iou_thre=0.5, num_class=2):
     # 然后计算每个类上的AP(sklearn)，并进行平均（使用average=macro）
     pred_cls = torch.cat(pred_cls, dim=0).cpu().numpy()
     true_cls_for_pred = true_cls_for_pred.cpu().numpy()
-    mAP = average_precision_score(
-        true_cls_for_pred, pred_cls, average='macro')
-    return mAP
+    # mAP = average_precision_score(
+    #     true_cls_for_pred, pred_cls, average='macro')
+    aps = []
+    for t, p in zip(true_cls_for_pred.T, pred_cls.T):
+        if len(t) == 0:
+            aps.append(0.)
+        else:
+            aps.append(average_precision_score(t, p))
+    return aps, np.mean(aps)
 
 
 def random_rectangle(num, img_size=(1200, 1920)):
@@ -59,20 +71,84 @@ def random_rectangle(num, img_size=(1200, 1920)):
     return torch.stack([xmin, ymin, xmax, ymax], dim=1)
 
 
+def simulate_labels(true_labels, pos_min=0.4, pos_max=1.0):
+    proba_interval = pos_max - pos_min
+    simu_proba = torch.rand(len(true_labels), dtype=torch.float) *\
+        proba_interval + pos_min
+    simu_proba = simu_proba * true_labels.float() +\
+        (1 - true_labels).float() * (1 - simu_proba)
+    simu_proba = torch.stack([1. - simu_proba, simu_proba], dim=1)
+    return simu_proba
+
+
+def simulate_markers(true_markers, shape_ratio=(0.8, 1.2)):
+    obj_wh = true_markers[:, 2:] - true_markers[:, :2]
+    ratio_interval = shape_ratio[1] - shape_ratio[0]
+    simu_ratio = torch.rand_like(obj_wh) * ratio_interval + shape_ratio[0]
+    simu_wh = obj_wh.float() * simu_ratio
+    simu_max = true_markers[:, :2] + simu_wh
+    return torch.cat([true_markers[:, :2], simu_max], dim=1)
+
+
 def test():
-    img = Image.new('RGB', (1920, 1200), color='white')
-    draw = ImageDraw.Draw(img)
-    rectangles1 = random_rectangle(6)
-    pred_cls = torch.rand(6, 2)
-    rectangles2 = random_rectangle(4)
-    true_cls = torch.randint(2, size=(4,))
-    for i in range(4):
-        rec1 = rectangles1[:, [1, 0, 3, 2]][i]
-        rec2 = rectangles2[:, [1, 0, 3, 2]][i]
-        draw.rectangle(rec1.tolist(), outline='red', width=3)
-        draw.rectangle(rec2.tolist(), outline='blue', width=3)
-    img.show()
-    print(mAP(true_cls, rectangles2, pred_cls, rectangles1))
+    if platform.system() == 'Windows':
+        root_dir = 'E:/Python/AllDetection/label_boxes'
+    else:
+        root_dir = '/home/dl/deeplearning_img/AllDet/label_boxes'
+    img_label_dir_pair = []
+    for d in os.listdir(root_dir):
+        img_dir = os.path.join(root_dir, d)
+        label_dir = os.path.join(root_dir, d, 'outputs')
+        img_label_dir_pair.append((img_dir, label_dir))
+
+    data_df = get_data_df(img_label_dir_pair, check=True)
+    if len(sys.argv) == 1:
+        dataset = AllDetectionDataset(data_df, input_size=(1200, 1920))
+        for i in range(99, 109):
+            img, labels, markers = dataset[i]
+            print(labels)
+            print(markers)
+            img = draw_rectangle(img, labels.numpy(), markers.numpy())
+            fig, ax = plt.subplots(figsize=(20, 10))
+            ax.imshow(np.asarray(img))
+            plt.show()
+            if i == 4:
+                break
+    else:
+        if sys.argv[1] == 'simulate_good':
+            score_ratio = (0.4, 1.0)
+            loc_ratio = (0.8, 1.2)
+        elif sys.argv[1] == 'simulate_bad_score':
+            score_ratio = (0.4, 0.6)
+            loc_ratio = (0.8, 1.2)
+        elif sys.argv[1] == 'simulate_bad_loc':
+            score_ratio = (0.4, 1.0)
+            loc_ratio = (0.4, 2.0)
+        dataset = AllDetectionDataset(data_df, input_size=(1200, 1920))
+        imgs = []
+        true_labels = []
+        true_markers = []
+        simu_labels = []
+        simu_markers = []
+        for i in range(99, 109):
+            img, labels, markers = dataset[i]
+            imgs.append(img)
+            true_labels.append(labels.cuda())
+            true_markers.append(markers.cuda())
+
+            simu_labels.append(simulate_labels(labels, *score_ratio).cuda())
+            simu_markers.append(simulate_markers(markers, loc_ratio).cuda())
+
+            # img = draw_rectangle(
+            #     img, simu_labels[-1].cpu().numpy(),
+            #     simu_markers[-1].cpu().numpy())
+            # fig, ax = plt.subplots(figsize=(20, 10))
+            # ax.imshow(np.asarray(img))
+            #     plt.show()
+        map_score = mAP(
+            true_labels, true_markers, simu_labels, simu_markers,
+            iou_thre=0.5, num_class=2)
+        print(map_score)
 
 
 if __name__ == "__main__":
