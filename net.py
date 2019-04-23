@@ -1,3 +1,5 @@
+from math import log 
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -61,7 +63,9 @@ class RetinaNet(nn.Module):
         self.num_class = num_class
         self.num_anchors = num_anchors
         self.loc_head = self._make_head(self.num_anchors * 4)
-        self.cls_head = self._make_head(self.num_anchors * self.num_class)
+        self.cls_head = self._make_head(
+                self.num_anchors * self.num_class, bias_init=-log(0.99 * 0.01)
+        )
 
     def forward(self, x):
         fms = self.fpn(x)
@@ -77,14 +81,18 @@ class RetinaNet(nn.Module):
             cls_preds.append(cls_pred)
         return torch.cat(cls_preds, 1), torch.cat(loc_preds, 1)
 
-    def _make_head(self, out_planes):
+    def _make_head(self, out_planes, bias_init=None):
         layers = []
         for _ in range(4):
             layers.append(
                 nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1))
             layers.append(nn.ReLU(True))
-        layers.append(
-            nn.Conv2d(256, out_planes, kernel_size=3, stride=1, padding=1))
+
+        last_layer = nn.Conv2d(
+                256, out_planes, kernel_size=3, stride=1, padding=1)
+        if bias_init is not None:
+            nn.init.constant_(last_layer.bias, bias_init)
+        layers.append(last_layer)
         return nn.Sequential(*layers)
 
     def freeze_bn(self):

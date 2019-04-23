@@ -133,7 +133,7 @@ class AllDetectionDataset(Dataset):
             labels, cls_targets，这里视y_encoder_mode的值来返回不同的结果，如果
                 是anchor，则只返回cls_targts（即编码后的在anchors水平上的标签和
                 位置偏移量），如果是object则返回labels（原始的obj的标签和labels
-                ），只是把标签给数值化；
+                ），只是把标签给数值化，如果是all则返回两者；
             markers, loc_targets，同上；
         '''
         img_f, label_f = self.df.iloc[idx, :].values
@@ -162,6 +162,17 @@ class AllDetectionDataset(Dataset):
         因为在不同y_encode_mode下后返回不同类型的结果，比如tensor和list，为了
             能够在合并成batch的时候区别对待，这里编写一个collate_fn用于dataloader
             的collate_fn参数，用于怎么把单个sample合并成batch；
+        args:
+            batch，多个__getitem__返回的结果组成的list；
+        returns:
+            img_batch，多个images组成的tensor，(#imgs, #channels, #height,
+                #width)；
+            label_batch, cls_target_batch，这里视y_encoder_mode的值来返回不同的
+                结果，如果是anchor，则只返回cls_targts_batch（即编码后的在
+                anchors水平上的标签和位置偏移量），如果是object则返回label_batch
+                （原始的obj的标签和labels），只是把标签给数值化，如果是all则两者
+                都返回，其中label_batch还是list，cls_target_batch是tensors；
+            marker_batch, loc_target_batch，同上；
         '''
         if self.y_encoder_mode == 'anchor':
             return default_collate(batch)
@@ -183,7 +194,23 @@ class AllDetectionDataset(Dataset):
             )
 
 
+'''
+以下是关于本模块测试的函数
+'''
+
+
 def draw_rectangle(img, labels, markers, color_mapper={0: 'green', 1: 'red'}):
+    '''
+    在img上画上标记框，如果labels是概率，则会计算其最大的概率，根据最大的列标
+        来表颜色，并把最大的概率写在上面；
+    args:
+        img，PIL的Image对象；
+        labels，iterable，是objects的标签；
+        markers，iterable，是objects的boxes的loc；
+        color_mapper，dict，keys是markers，values是用于draw的颜色；
+    returns:
+        img，PIL的Image对象，画上标记框的image；
+    '''
     draw = Draw(img)
     # font = ImageFont.truetype(font="C:/Windows/Fonts/Calibar", size=5)
     for label, marker in zip(labels, markers):

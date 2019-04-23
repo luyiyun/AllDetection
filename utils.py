@@ -39,6 +39,11 @@ def meshgrid(x, y, row_major=True):
 def change_box_order(boxes, order):
     '''
     在xyxy和xywh两种格式间进行转换
+    args:
+        boxes，(#boxes, 4)，boxes的loc信息
+        order，两种，'xyxy2xywh', 'xywh2xyxy'
+    returns:
+        boxes，(#boxes, 4)，得到转换后的boxes的loc信息
     '''
     assert order in ['xyxy2xywh', 'xywh2xyxy']
     a = boxes[:, :2]
@@ -52,6 +57,10 @@ def change_box_order(boxes, order):
 def box_iou(box1, box2, order='xyxy'):
     '''
     计算两组boxes的IoU
+    args:
+        box1：(#boxes, 4)
+        box2：(#boxes, 4)
+        order：xyxy or xywh
     returns：
         ious, shape是[len(box1), len(box2)]
     '''
@@ -89,6 +98,8 @@ def box_nms(bboxes, scores, threshold=0.5, mode='union'):
             上预测的是同一个obj，则得分较低的删除；
         mode: 如果是union，则计算的是IoU，如果是min，则计算交集和两个框较小的那
             个的比值；
+    returns:
+        返回保留的boxes的index
     '''
     x1 = bboxes[:, 0]
     y1 = bboxes[:, 1]

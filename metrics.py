@@ -140,11 +140,11 @@ def test():
             simu_markers.append(simulate_markers(markers, loc_ratio).cuda())
 
             # img = draw_rectangle(
-            #     img, simu_labels[-1].cpu().numpy(),
-            #     simu_markers[-1].cpu().numpy())
+            # img, simu_labels[-1].cpu().numpy(),
+            # simu_markers[-1].cpu().numpy())
             # fig, ax = plt.subplots(figsize=(20, 10))
             # ax.imshow(np.asarray(img))
-            #     plt.show()
+            # plt.show()
         map_score = mAP(
             true_labels, true_markers, simu_labels, simu_markers,
             iou_thre=0.5, num_class=2)
