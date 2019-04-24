@@ -1,8 +1,9 @@
-from math import log 
+from math import log
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.init as init
 from torchvision.models import resnet50, resnet101
 
 
@@ -27,6 +28,8 @@ class FPN(nn.Module):
             256, 256, kernel_size=3, stride=1, padding=1)
         self.toplayer2 = nn.Conv2d(
             256, 256, kernel_size=3, stride=1, padding=1)
+
+        self.init()
 
     def forward(self, x):
         # Bottom-up
@@ -55,6 +58,11 @@ class FPN(nn.Module):
         return F.interpolate(
             x, size=(H, W), mode='bilinear', align_corners=True) + y
 
+    def init(self):
+        for n, m in self.named_children():
+            if n != 'backbone':
+                init.normal_(m.weight, 0, 0.01)
+
 
 class RetinaNet(nn.Module):
     def __init__(self, backbone=resnet50, num_class=2, num_anchors=9):
@@ -66,6 +74,7 @@ class RetinaNet(nn.Module):
         self.cls_head = self._make_head(
                 self.num_anchors * self.num_class, bias_init=-log(0.99 * 0.01)
         )
+        self.init()
 
     def forward(self, x):
         fms = self.fpn(x)
@@ -102,9 +111,16 @@ class RetinaNet(nn.Module):
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
 
+    def init(self):
+        for n, m in self.named_modules():
+            if 'fpn' not in n and isinstance(m, nn.Conv2d):
+                init.normal_(m.weight, 0, 0.01)
+
 
 def main():
     net = RetinaNet()
+    for n, m in net.named_modules():
+        print(n)
     loc_preds, cls_preds = net(torch.rand(2, 3, 224, 224))
     print(loc_preds.size())
     print(cls_preds.size())
