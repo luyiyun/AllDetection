@@ -342,12 +342,13 @@ def main():
     # 模型建立
     net = RetinaNet()
     net.cuda()
-    net.freeze_bn()  # ???
+    # net.freeze_bn()  # ???
     criterion = FocalLoss()
     optimizer = optim.SGD(
         net.parameters(), lr=args.learning_rate,
-        momentum=0.9, weight_decay=1e-4
+        momentum=0.9,  # weight_decay=1e-4
     )
+    # optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
     lr_schedular = None
 
     # 模型训练
