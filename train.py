@@ -368,7 +368,7 @@ def main():
     test_res['APs'] = test_map[0]
     test_res['mAP'] = test_map[1]
     with open(os.path.join(save_dir, 'test.json'), 'w') as f:
-        json.dump(test_loss, f)
+        json.dump(test_res, f)
 
     train_df = pd.DataFrame(history)
     train_df.to_csv(os.path.join(save_dir, 'train.csv'))

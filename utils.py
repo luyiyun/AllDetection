@@ -152,6 +152,15 @@ def box_nms(bboxes, scores, threshold=0.5, mode='union'):
 
 
 def one_hot(labels, num_class, device=None):
+    '''
+    将labels one-hot向量化
+    args:
+        labels，0-#classes的整数组成的一维的tensor
+        num_class，#classes
+        device，将结果储存在哪个设备中，默认是CPU上
+    returns:
+        
+    '''
     y = torch.eye(num_class)
     if device is not None:
         y = y.to(device)
