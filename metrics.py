@@ -58,6 +58,11 @@ def mAP(true_cls, true_loc, pred_cls, pred_loc, iou_thre=0.5, num_class=2):
     return aps, np.mean(aps)
 
 
+'''
+以下是测试的代码
+'''
+
+
 def random_rectangle(num, img_size=(1200, 1920)):
     imgh, imgw = img_size
     xmin = torch.randint(imgh, size=(num,))

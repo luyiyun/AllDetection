@@ -142,7 +142,7 @@ class AllDetectionDataset(Dataset):
         labels = torch.tensor([self.label_mapper[l] for l in labels])
         markers = torch.tensor(markers, dtype=torch.float)
         if self.transfer is not None:
-            img, labels, markers = self.transfer(img, labels, markers)
+            img, labels, markers = self.transfer([img, labels, markers])
         if self.y_encoder_mode == 'all':
             cls_targets, loc_targets = self.y_encoder.encode(labels, markers)
             return img, (labels, cls_targets), (markers, loc_targets)
@@ -175,7 +175,7 @@ class AllDetectionDataset(Dataset):
             marker_batch, loc_target_batch，同上；
         '''
         if self.y_encoder_mode == 'anchor':
-            return default_collate(batch)
+            return tuple(default_collate(batch))
         elif self.y_encoder_mode == 'object':
             img_batch = [b[0] for b in batch]
             label_batch = [b[1] for b in batch]

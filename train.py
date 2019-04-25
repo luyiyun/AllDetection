@@ -3,7 +3,6 @@ import copy
 import json
 from itertools import chain
 
-import numpy as np
 import pandas as pd
 import torch
 import torch.utils.data as data
@@ -62,7 +61,7 @@ def train(
             if phase == 'train':
                 net.train()
                 if lr_schedular is not None:
-                    raise NotImplementedError
+                    lr_schedular.step()
                 widgets = [
                     'epoch: %d' % e, '| ', pb.Counter(),
                     pb.Bar(), pb.AdaptiveETA(),
@@ -286,7 +285,26 @@ def main():
         '-rd', '--root_dir', default='E:/Python/AllDetection/label_boxes',
         help='数据集所在的根目录，其内部是子文件夹储存图片'
     )
+    parser.add_argument(
+        '--no_bn_freeze', action='store_false',
+        help=(
+            '是否固定RetinaNet中的BatchNorm中的参数不训练，'
+            '如果使用此命令，则BatchNorm中的参数也会训练'
+        )
+    )
+    parser.add_argument(
+        '--no_normalize', action='store_false',
+        help='是否对数据进行标准化，如果使用该参数则不进行标准化'
+    )
+    parser.add_argument(
+        '--lr_schedular', action='store_true',
+        help=(
+            '是否使用MultiStepLR，如果使用此参数，'
+            '则使用，如果不使用此参数则没有lr_schedulr'
+        )
+    )
     args = parser.parse_args()
+    import ipdb;ipdb.set_trace()
     # 读取数据根目录，构建data frame
     img_label_dir_pair = []
     for d in os.listdir(args.root_dir):
@@ -303,34 +321,39 @@ def main():
     )
 
     # 数据集建立
-    data_augment = transfers.MultiCompose([
+    if args.no_normalize:
+        img_transfer = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+        ])
+    else:
+        img_transfer = transforms.Compose([
+            transforms.ToTensor(),
+        ])
+    img_transfer = transfers.OnlyImage(img_transfer)
+    data_augment = transforms.Compose([
         transfers.RandomFlipLeftRight(),
         transfers.RandomFlipTopBottom(),
     ])
     # 注意对于PIL，其输入大小时是w,h的格式
     resize_transfer = transfers.Resize(args.input_size)
-    img_transfer = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-    ])
-    img_transfer = transfers.OnlyImage(img_transfer)
-    train_transfers = transfers.MultiCompose([
+    train_transfers = transforms.Compose([
         data_augment, resize_transfer, img_transfer
     ])
-    test_transfers = transfers.MultiCompose([
+    test_transfers = transforms.Compose([
         resize_transfer, img_transfer
     ])
     datasets = {
         'train': AllDetectionDataset(
             train_df, transfer=train_transfers, y_encoder_mode='anchor',
-            input_size=(600, 960)),
+            input_size=args.input_size),
         'valid': AllDetectionDataset(
             valid_df, transfer=test_transfers,
-            y_encoder_mode='all', input_size=(600, 960)
+            y_encoder_mode='all', input_size=args.input_size
         ),
         'test': AllDetectionDataset(
             test_df, transfer=test_transfers, y_encoder_mode='all',
-            input_size=(600, 960))
+            input_size=args.input_size)
     }
     dataloaders = {
         k: data.DataLoader(
@@ -342,14 +365,20 @@ def main():
     # 模型建立
     net = RetinaNet()
     net.cuda()
-    # net.freeze_bn()  # ???
+    if args.no_bn_freeze:
+        net.freeze_bn()  # ???
     criterion = FocalLoss()
     optimizer = optim.SGD(
         net.parameters(), lr=args.learning_rate,
-        momentum=0.9,  # weight_decay=1e-4
+        momentum=0.9, weight_decay=1e-4
     )
     # optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
-    lr_schedular = None
+    if args.lr_schedular:
+        lr_schedular = optim.lr_scheduler.MultiStepLR(
+            optimizer, [100, 200], gamma=0.1
+        )
+    else:
+        lr_schedular = None
 
     # 模型训练
     history, (test_loss, test_map) = train(

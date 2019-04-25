@@ -211,9 +211,9 @@ class YEncoder:
         return torch.cat(boxes, 0)
 
 
-def main():
+def test():
     pass
 
 
 if __name__ == "__main__":
-    main()
+    test()

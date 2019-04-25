@@ -159,7 +159,7 @@ def one_hot(labels, num_class, device=None):
         num_class，#classes
         device，将结果储存在哪个设备中，默认是CPU上
     returns:
-        
+        one_hot_labels，one hot变换后的tensor
     '''
     y = torch.eye(num_class)
     if device is not None:
