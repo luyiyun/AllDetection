@@ -4,14 +4,22 @@ import platform
 
 import numpy as np
 import torch
-from sklearn.metrics import average_precision_score
+import sklearn.metrics as skm
 import matplotlib.pyplot as plt
 
 from utils import box_iou, one_hot
 from data_loader import get_data_df, AllDetectionDataset, draw_rectangle
 
 
-def mAP(true_cls, true_loc, pred_cls, pred_loc, iou_thre=0.5, num_class=2):
+def AP2(true, pred):
+    p, r, _ = skm.precision_recall_curve(true, pred)
+    return skm.auc(r, p)
+
+
+def mAP(
+    true_cls, true_loc, pred_cls, pred_loc, iou_thre=0.5, num_class=2,
+    ap_func=AP2
+):
     '''
     计算mAP
     args:
@@ -54,7 +62,7 @@ def mAP(true_cls, true_loc, pred_cls, pred_loc, iou_thre=0.5, num_class=2):
         if len(t) == 0:
             aps.append(0.)
         else:
-            aps.append(average_precision_score(t, p))
+            aps.append(ap_func(t, p))
     return aps, np.mean(aps)
 
 

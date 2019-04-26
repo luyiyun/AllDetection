@@ -3,11 +3,13 @@ import copy
 import json
 from itertools import chain
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.utils.data as data
 import torch.optim as optim
 import torchvision.transforms as transforms
+from torchvision import models
 from sklearn.model_selection import train_test_split
 import argparse
 import progressbar as pb
@@ -129,10 +131,12 @@ def train(
                     history['val_cls_loss'].append(epoch_cls_loss)
                     history['val_loc_loss'].append(epoch_loc_loss)
                     history['mAP'].append(map_score)
-                    if epoch_loss < best_loss:
+                    if map_score is np.nan:
+                        map_score = 0
+                    if map_score > best_map:
+                        best_map = map_score
                         best_loss = epoch_loss
                         best_model_wts = copy.deepcopy(net.state_dict())
-                        best_map = map_score
                     print(
                         ('%s, loss: %.4f, cls_loss: %.4f,'
                          ' loc_loss: %.4f, mAP: %.4f') %
@@ -303,8 +307,11 @@ def main():
             '则使用，如果不使用此参数则没有lr_schedulr'
         )
     )
+    parser.add_argument(
+        '-bb', '--backbone', default='resnet50',
+        help='使用的backbone网络，默认是resnet50'
+    )
     args = parser.parse_args()
-    import ipdb;ipdb.set_trace()
     # 读取数据根目录，构建data frame
     img_label_dir_pair = []
     for d in os.listdir(args.root_dir):
@@ -363,7 +370,11 @@ def main():
     }
 
     # 模型建立
-    net = RetinaNet()
+    if args.backbone == 'resnet50':
+        backbone = models.resnet50
+    elif args.backbone == 'resnet101':
+        backbone = models.resnet101
+    net = RetinaNet(backbone=backbone)
     net.cuda()
     if args.no_bn_freeze:
         net.freeze_bn()  # ???
@@ -375,7 +386,7 @@ def main():
     # optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
     if args.lr_schedular:
         lr_schedular = optim.lr_scheduler.MultiStepLR(
-            optimizer, [100, 200], gamma=0.1
+            optimizer, [50, 150], gamma=0.1
         )
     else:
         lr_schedular = None
