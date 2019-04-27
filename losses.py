@@ -48,7 +48,7 @@ class FocalLoss(nn.Module):
         pos = cls_targets > 0
         num_pos = pos.data.long().sum()
         pos_neg = cls_targets > -1  # 要忽略的anchors去除
-        num_pos_neg = pos_neg.data.long().sum()
+        # num_pos_neg = pos_neg.data.long().sum()
 
         # smoothl1loss, loc_loss, 做bbr，只使用分配了object的anchors进行
         mask = pos.unsqueeze(2).expand_as(loc_preds)  # 先做成4的长度，便于mask
@@ -65,7 +65,7 @@ class FocalLoss(nn.Module):
         # 直接用两个均数相加不行吗，这样实际上cls_loss使用的样本数量不是num_pos
         # ？？？？？
         loc_loss = loc_loss / num_pos
-        cls_loss = cls_loss / num_pos_neg
+        cls_loss = cls_loss / num_pos
         loss = loc_loss + cls_loss
         return loss, cls_loss, loc_loss
 

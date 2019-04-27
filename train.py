@@ -311,6 +311,13 @@ def main():
         '-bb', '--backbone', default='resnet50',
         help='使用的backbone网络，默认是resnet50'
     )
+    parser.add_argument(
+        '--no_normal_init', action='store_false',
+        help=(
+            '是否使用normal分布来初始化新增加的layer，如果使用此参数，'
+            '则不normal初始化'
+        )
+    )
     args = parser.parse_args()
     # 读取数据根目录，构建data frame
     img_label_dir_pair = []
@@ -374,7 +381,7 @@ def main():
         backbone = models.resnet50
     elif args.backbone == 'resnet101':
         backbone = models.resnet101
-    net = RetinaNet(backbone=backbone)
+    net = RetinaNet(backbone=backbone, normal_init=args.no_normal_init)
     net.cuda()
     if args.no_bn_freeze:
         net.freeze_bn()  # ???

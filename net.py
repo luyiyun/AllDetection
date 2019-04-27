@@ -12,7 +12,7 @@ class FPN(nn.Module):
     FPN网络，通过增加额外的top-down feature map和横向连接来提高对于小物体预测的
     能力。
     '''
-    def __init__(self, backbone=resnet50):
+    def __init__(self, backbone=resnet50, normal_init=True):
         '''
         args:
             backbone，torchvision.models中的预训练的模型，现在仅支持resnet
@@ -35,8 +35,9 @@ class FPN(nn.Module):
             256, 256, kernel_size=3, stride=1, padding=1)
         self.toplayer2 = nn.Conv2d(
             256, 256, kernel_size=3, stride=1, padding=1)
-        # 对新增加的layers使用weight=normal(0, 0.01)、bias=0进行初始化
-        self.init()
+        if normal_init:
+            # 对新增加的layers使用weight=normal(0, 0.01)、bias=0进行初始化
+            self.init()
 
     def forward(self, x):
         # Bottom-up
@@ -77,7 +78,8 @@ class RetinaNet(nn.Module):
     RetinaNet
     '''
     def __init__(
-        self, backbone=resnet50, num_class=2, num_anchors=9, head_bn=False
+        self, backbone=resnet50, num_class=2, num_anchors=9, head_bn=False,
+        normal_init=True
     ):
         '''
         args:
@@ -88,14 +90,15 @@ class RetinaNet(nn.Module):
         super(RetinaNet, self).__init__()
         self.head_bn = head_bn
 
-        self.fpn = FPN(backbone)
+        self.fpn = FPN(backbone, normal_init=normal_init)
         self.num_class = num_class
         self.num_anchors = num_anchors
         self.loc_head = self._make_head(self.num_anchors * 4)
         self.cls_head = self._make_head(
                 self.num_anchors * self.num_class, bias_init=-log(0.99 * 0.01)
         )
-        self.init()
+        if normal_init:
+            self.init()
 
     def forward(self, x):
         fms = self.fpn(x)

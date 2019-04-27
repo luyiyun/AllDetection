@@ -49,9 +49,9 @@ def change_box_order(boxes, order):
     a = boxes[:, :2]
     b = boxes[:, 2:]
     if order == 'xyxy2xywh':
-        return torch.cat([(a + b) / 2, b - a + 1], 1)
+        return torch.cat([(a + b) / 2, b - a], 1)
     else:
-        return torch.cat([(a - b) / 2, a + b / 2], 1)
+        return torch.cat([a - b / 2, a + b / 2], 1)
 
 
 def box_iou(box1, box2, order='xyxy'):
@@ -76,12 +76,12 @@ def box_iou(box1, box2, order='xyxy'):
     # 下面那个同理，求的是交集的下界
     lt = torch.max(box1[:, None, :2], box2[:, :2])
     rb = torch.min(box1[:, None, 2:], box2[:, 2:])
-    wh = (rb - lt + 1).clamp(min=0)  # ????
+    wh = (rb - lt).clamp(min=0)  # ????
     # 这里也可以使用方法prod(dim=2)，但测试其速度慢一点
     inter = wh[:, :, 0] * wh[:, :, 1]
 
-    area1 = (box1[:, 2] - box1[:, 0] + 1) * (box1[:, 3] - box1[:, 1] + 1)
-    area2 = (box2[:, 2] - box2[:, 0] + 1) * (box2[:, 3] - box2[:, 1] + 1)
+    area1 = (box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1])
+    area2 = (box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1])
     # long的除法只是整除运算，必须先变成的float
     iou = inter.float() / (area1[:, None] + area2 - inter).float()
     return iou
@@ -166,3 +166,51 @@ def one_hot(labels, num_class, device=None):
         y = y.to(device)
     return y[labels]
 
+
+def test():
+    import argparse
+    from PIL import Image, ImageDraw
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--box1', nargs=4, type=int, default=[1000, 600, 1150, 750],
+        help='测试IoU的box1'
+    )
+    parser.add_argument(
+        '--box2', nargs=4, type=int, default=[1100, 600, 1250, 750],
+        help='测试IoU的box2'
+    )
+    parser.add_argument(
+        '--func', default='box_iou', help='测试哪个函数，默认是box_iou'
+    )
+    args = parser.parse_args()
+
+    if args.func == 'box_iou':
+        box1 = torch.tensor([args.box1], dtype=torch.float)
+        box2 = torch.tensor([args.box2], dtype=torch.float)
+        iou = box_iou(box1, box2, 'xyxy')
+
+        img = Image.new(mode='RGB', size=(1920, 1200), color='black')
+        draw = ImageDraw.Draw(img)
+        draw.rectangle(args.box1, outline='blue')
+        draw.rectangle(args.box2, outline='red')
+        img.show()
+        print(iou.item())
+    elif args.func == 'change_box_order':
+        for b in [args.box1, args.box2]:
+            b = torch.tensor([b], dtype=torch.float)
+            xywh = change_box_order(b, 'xyxy2xywh')
+            xyxy = change_box_order(xywh, 'xywh2xyxy')
+            print('begin:%s, end:%s' % (str(b), str(xyxy)))
+    elif args.func == 'one_hot':
+        a = torch.randint(3, size=(10,))
+        b = one_hot(a, 3)
+        print(a)
+        print(b)
+    elif args.func == 'meshgrid':
+        print(meshgrid(3, 2, True))
+        print(meshgrid(3, 2, False))
+
+
+if __name__ == "__main__":
+    test()

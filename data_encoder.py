@@ -16,7 +16,7 @@ class YEncoder:
     '''
     def __init__(
         self, anchor_areas=[(2. ** i) ** 2 for i in range(5, 10)],
-        aspect_ratios=[1/2., 1/1., 1/1.],
+        aspect_ratios=[1/2., 2/1., 1/1.],
         scale_ratios=[1., pow(2, 1/3.), pow(2, 2/3.)],
         iou_thre=0.5, ignore_thres=(0.4, 0.5), cls_thre=0.5, nms_thre=0.5,
         input_size=None
@@ -45,14 +45,17 @@ class YEncoder:
         # tensor的计算的时候，如果分子是int，那么进行除法的时候实际上使用的
         #   是整除，所以为了避免在之后计算特征图大小（而这里是ceil）的时候出错，
         #   这里先对其float变换一下
+        if input_size is None:
+            input_size = (1920, 1200)
         self.input_size = torch.tensor(
             [input_size, input_size], dtype=torch.float
         ) if isinstance(input_size, int) else \
             torch.tensor(input_size, dtype=torch.float)
         self.num_anchor_per_cell = len(aspect_ratios) * len(scale_ratios)
         self.anchor_wh = self._get_anchor_wh()
+        self.anchor_boxes = self._get_anchor_boxes(self.input_size)
 
-    def encode(self, labels, boxes, input_size=None):
+    def encode(self, labels, boxes, input_size=None, test=False):
         '''
         编码xml中的object格式为bounding boxes regression的格式
         tx = (x - anchor_x) / anchor_w
@@ -66,6 +69,7 @@ class YEncoder:
             boxes: tensor, ground truth bounding boxes，
                 (xmin, ymin, xmax, ymax)，size是[#box, 4]
             input_size：int/tuple，输入图像的大小
+            test: 测试时使用；
         returns:
             cls_targets: tensor，每个anchor被赋予的标签，size是[#anchors, ]，
                 其中的值0代表背景类，1-k表示k个分类，-1表示忽略的anchors
@@ -74,30 +78,37 @@ class YEncoder:
         '''
         if input_size is None:
             input_size = self.input_size
+            anchor_boxes = self.anchor_boxes
         else:
             input_size = torch.tensor(
                 [input_size, input_size], dtype=torch.float
             ) if isinstance(input_size, int) else \
                 torch.tensor(input_size, dtype=torch.float)
-        anchor_boxes = self._get_anchor_boxes(input_size)
+            anchor_boxes = self._get_anchor_boxes(input_size)
         boxes = change_box_order(boxes, 'xyxy2xywh')
         # 计算每个anchor和每个gtbb间的iou，根据此来给标签
         ious = box_iou(anchor_boxes, boxes, order='xywh')
         max_ious, max_ids = ious.max(1)
         boxes = boxes[max_ids]
-        # 计算bbr的偏移量，即bbr的标签
-        loc_xy = (boxes[:, :2] - anchor_boxes[:, :2]) / anchor_boxes[:, 2:]
-        loc_wh = torch.log(boxes[:, 2:] / anchor_boxes[:, 2:])
-        loc_targets = torch.cat([loc_xy, loc_wh], 1)
+        if test:
+            _, orders = max_ious.sort(0, True)
+            loc_targets = change_box_order(anchor_boxes, 'xywh2xyxy')[orders]
+        else:
+            # 计算bbr的偏移量，即bbr的标签
+            loc_xy = (boxes[:, :2] - anchor_boxes[:, :2]) / anchor_boxes[:, 2:]
+            loc_wh = torch.log(boxes[:, 2:] / anchor_boxes[:, 2:])
+            loc_targets = torch.cat([loc_xy, loc_wh], 1)
         cls_targets = 1 + labels[max_ids]  # 加1是为了空出0来给背景类
         # 规定背景类，规定忽略的anchors
         cls_targets[max_ious < self.iou_thre] = 0
         ignore = (max_ious > self.ignore_thres[0]) & \
             (max_ious < self.ignore_thres[1])
         cls_targets[ignore] = -1  # 这些anchors是不用的
+        if test:
+            cls_targets = cls_targets[orders]
         return cls_targets, loc_targets
 
-    def decode(self, cls_preds, loc_preds, input_size=None):
+    def decode(self, cls_preds, loc_preds, input_size=None, cuda=True):
         '''
         将网络的输出转化为正常的人们所能理解的标签和boxes
         这里的cls_preds和loc_preds因为是网络的输出，所以其第一个维度是batch
@@ -109,6 +120,8 @@ class YEncoder:
                 #anchors, 4]，#anchors是所有特征图上的所有anchors
             input_size：int/tuple，输入图像的大小，可以是None，此时使用实例化
                 YEncoder对象时候输入的input_size；
+            cuda：是否将anchor_boxes转入cuda，默认是True，只在测试的时候需要
+                它；
         returns:
             labels: list of tensors, 每个tensors的size是[#boxes_i, #classes]，
                 表示的是一张图片中预测框在每一类的logits值；
@@ -118,12 +131,17 @@ class YEncoder:
         # 根据图像的大小和anchor设定来计算出所有anchor的信息
         if input_size is None:
             input_size = self.input_size
+            anchor_boxes = self.anchor_boxes
+            if cuda:
+                anchor_boxes = anchor_boxes.cuda()
         else:
             input_size = torch.tensor(
                 [input_size, input_size], dtype=torch.float
             ) if isinstance(input_size, int) else \
                 torch.tensor(input_size, dtype=torch.float)
-        anchor_boxes = self._get_anchor_boxes(input_size).cuda()
+            if cuda:
+                anchor_boxes = self._get_anchor_boxes(input_size)
+                anchor_boxes = anchor_boxes.cuda()
         if cls_preds.dim() == 3:
             anchor_boxes = anchor_boxes.unsqueeze(0).expand_as(loc_preds)
         # 取出预测的中心偏移量和宽高缩放量
@@ -178,11 +196,13 @@ class YEncoder:
             anchor_wh.append(anchor_wh_per_cell)
         return torch.tensor(anchor_wh)
 
-    def _get_anchor_boxes(self, input_size):
+    def _get_anchor_boxes(self, input_size, concat=True):
         '''
         计算每个anchor其所对应的boxes的坐标
         args:
-            input_size: tensor, 输入图像的大小，(w, h)
+            input_size: tensor, 输入图像的大小，(w, h)；
+            concat：boolean，如果False则返回list代表不同大小的feature map的
+                anchors，这主要用于下面的test用；
         return:
             boxes: 所有特征图的anchor的中心点坐标及其宽高，shape是
                 [anchors的总数, 4]
@@ -191,10 +211,12 @@ class YEncoder:
         boxes = []
         for i in range(num_fms):
             # 每个特征图的大小，这里认为每个特征图依次下采样了2倍
-            fm_size = (input_size / pow(2., i+3)).ceil()
+            # 这里要和anchor boxes的大小区分开，anchor的数量主要通过其使用的
+            #   feature map上空间点的数量来确定，而anchor boxes的大小是看这个
+            #   feature的感受野大小来确定的
+            grid_size = torch.tensor([pow(2., i+3)] * 2, dtype=torch.float)
+            fm_size = (input_size / grid_size).ceil()
             fm_w, fm_h = int(fm_size[0]), int(fm_size[1])
-            # 每个空间点应该对应原图中多大的范围
-            grid_size = (input_size / fm_size).to(torch.float)
             # 计算的坐标是每个空间点在原图对应的矩形的中心点坐标
             xy = meshgrid(fm_w, fm_h) + 0.5
             # 这样的计算本质上等价于fm_w * grid_size + 0.5 * grad_size
@@ -207,12 +229,115 @@ class YEncoder:
             ).expand(fm_h, fm_w, self.num_anchor_per_cell, 2)
             box = torch.cat([xy, wh], dim=3)  # 这样每个位置点的是[x, y, w, h]
             boxes.append(box.view(-1, 4))
-
-        return torch.cat(boxes, 0)
+        if concat:
+            return torch.cat(boxes, 0)
+        else:
+            return boxes
 
 
 def test():
-    pass
+    import random
+
+    import argparse
+    from PIL import Image, ImageDraw
+
+    from utils import one_hot
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '-is', '--input_size', default=(1920, 1200), nargs=2, type=int,
+        help='图像的大小，wxh，默认是1920x1200'
+    )
+    parser.add_argument(
+        '-m', '--mode', default='show_wh',
+        help=(
+            'show_wh是展示每个位置不同feature map出现的的anchor（默认），'
+            'show_anchor_center是将图像中所有的anchor point都画出，'
+            'show_encode是根据给定（或随机）的一个gtbb来看不同anchor box的标'
+            '签，show_decode是先使用decode来编码后再使用decode来解码看能不能'
+            '得到原来的结果，以此来测试decode方法'
+        )
+    )
+    parser.add_argument(
+        '-b', '--box', default=None, nargs=4, type=int,
+        help='当是show_encode时，如果此不为None，则使用这个来作为gtbb'
+    )
+    parser.add_argument(
+        '-tk', '--top_k', default=10, type=int,
+        help='当使用show_encode的时候，只显示IoU最大的几个anchor boxes'
+    )
+    args = parser.parse_args()
+    y_encoder = YEncoder(input_size=args.input_size)
+    if args.mode == 'show_wh':
+        cen = torch.tensor(args.input_size, dtype=torch.float) / 2
+        lt = cen - y_encoder.anchor_wh / 2
+        rb = cen + y_encoder.anchor_wh / 2
+        xyxy = torch.cat([lt, rb], dim=2)
+        for i in range(len(y_encoder.anchor_wh)):
+            img = Image.new(size=args.input_size, color='black', mode='RGB')
+            draw = ImageDraw.Draw(img)
+            xyxyi = xyxy[i]
+            for j in range(len(xyxyi)):
+                draw.rectangle(xyxyi[j].tolist(), outline='red')
+            img.show(title='anchor level: %d' % i)
+    elif args.mode == 'show_anchor_center':
+        anchorss = y_encoder._get_anchor_boxes(
+            torch.tensor(args.input_size, dtype=torch.float), concat=False)
+        for anchors in anchorss:
+            arr = anchors[:, :2].unique(dim=0)
+            img = Image.new(size=args.input_size, color='black', mode='RGB')
+            draw = ImageDraw.Draw(img)
+            arr = arr.view(-1)
+            draw.point(arr.tolist(), fill='red')
+            img.show()
+    elif args.mode == 'show_encode':
+        if args.box is None:
+            lt = [random.randint(1, i) for i in args.input_size]
+            rd = [
+                random.randint(i1, i2) for i1, i2 in zip(lt, args.input_size)]
+            xyxy = lt + rd
+        else:
+            xyxy = args.box
+        cls_target, loc_target = y_encoder.encode(
+            torch.tensor([1]), torch.tensor([xyxy], dtype=torch.float),
+            test=True
+        )
+        cls_target = cls_target[:args.top_k]
+        loc_target = loc_target[:args.top_k]
+        img = Image.new(size=args.input_size, color='black', mode='RGB')
+        draw = ImageDraw.Draw(img)
+        boxes2 = loc_target[cls_target == 2]
+        boxes_1 = loc_target[cls_target == -1]
+        # boxes0 = loc_target[cls_target == 0]
+        for b in boxes_1:
+            draw.rectangle(b.tolist(), outline='white')
+        for b in boxes2:
+            draw.rectangle(b.tolist(), outline='green')
+        draw.rectangle(xyxy, outline='red')
+        img.show()
+    elif args.mode == 'show_decode':
+        if args.box is None:
+            lt = [random.randint(1, i) for i in args.input_size]
+            rd = [
+                random.randint(i1, i2) for i1, i2 in zip(lt, args.input_size)]
+            xyxy = lt + rd
+        else:
+            xyxy = args.box
+        cls_target, loc_target = y_encoder.encode(
+            torch.tensor([1]), torch.tensor([xyxy], dtype=torch.float),
+        )
+        cls_pred = cls_target + 1
+        loc_pred = loc_target
+        cls_pred = one_hot(cls_pred, 4)[:, 2:]
+        cls_pred = cls_pred.to(dtype=torch.float)
+        cls_pred, loc_pred = cls_pred.unsqueeze(0), loc_pred.unsqueeze(0)
+        score, box = y_encoder.decode(cls_pred, loc_pred, cuda=False)
+        print('begin:%s, end:%s' % (str(xyxy), str(box)))
+        print(
+            'sigmoid 1:%s, end:%s' % (
+                str(torch.tensor([1.]).sigmoid()), str(score[0][:, 1])
+            )
+        )
 
 
 if __name__ == "__main__":
