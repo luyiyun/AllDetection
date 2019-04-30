@@ -23,6 +23,7 @@ from metrics import mAP
 
 def train(
     net, criterion, optimizer, dataloaders, epoch, lr_schedular=None,
+    clip_norm=None
 ):
     '''
     对RetinaNet进行训练，
@@ -34,6 +35,7 @@ def train(
             'test'，如果有test则会在最后使用训练过程中最好的net进行预测；
         epoch，int，一共需要进行多少个epoch的训练；
         lr_schedular，使用的学习率策略；
+        clip_norm, 使用的梯度截断的参数，如果是None则不进行梯度截断；
     returns：
         history，dict，储存每个epoch train的loss和valid的loss、mAP；
         （另外，实际上输入的net会发生改变，成为在训练过程中valid上最好的net）
@@ -97,6 +99,9 @@ def train(
                         cls_trues, loc_trues, cls_preds, loc_preds)
                     if phase == 'train':
                         loss.backward()
+                        if clip_norm is not None:
+                            torch.nn.utils.clip_grad_norm_(
+                                net.parameters(), clip_norm)
                         optimizer.step()
                     else:
                         label_preds, marker_preds = y_encoder.decode(
@@ -301,10 +306,11 @@ def main():
         help='是否对数据进行标准化，如果使用该参数则不进行标准化'
     )
     parser.add_argument(
-        '--lr_schedular', action='store_true',
+        '-ls', '--lr_schedular', default=None, type=int, nargs='+',
         help=(
-            '是否使用MultiStepLR，如果使用此参数，'
-            '则使用，如果不使用此参数则没有lr_schedulr'
+            '使用multistep的lr schedule的参数，默认是None，'
+            '如果是None则不进行lr schedule，如果不是None，则此为lr_schedular'
+            '的表示在哪个epoch进行lr降低的参数'
         )
     )
     parser.add_argument(
@@ -317,6 +323,22 @@ def main():
             '是否使用normal分布来初始化新增加的layer，如果使用此参数，'
             '则不normal初始化'
         )
+    )
+    parser.add_argument(
+        '--alpha', default=0.75, type=float,
+        help='focal loss的参数之一，默认是0.75'
+    )
+    parser.add_argument(
+        '--no_bias_init', action='store_false',
+        help='如果使用这个参数，则分类头最后一次的bias将不使用特殊的初始化模式'
+    )
+    parser.add_argument(
+        '-cn', '--clip_norm', default=None, type=float,
+        help='进行梯度截断的参数，默认是None，如果是None则不进行梯度截断'
+    )
+    parser.add_argument(
+        '-ps', default=[3, 4, 5, 6, 7], type=int, nargs='+',
+        help='使用FPN中的哪些特征图来构建anchors，默认是p3-p7'
     )
     args = parser.parse_args()
     # 读取数据根目录，构建data frame
@@ -350,24 +372,36 @@ def main():
         transfers.RandomFlipTopBottom(),
     ])
     # 注意对于PIL，其输入大小时是w,h的格式
-    resize_transfer = transfers.Resize(args.input_size)
-    train_transfers = transforms.Compose([
-        data_augment, resize_transfer, img_transfer
-    ])
-    test_transfers = transforms.Compose([
-        resize_transfer, img_transfer
-    ])
+    if list(args.input_size) == [1920, 1200]:
+        train_transfers = transforms.Compose([
+            data_augment, img_transfer
+        ])
+        test_transfers = img_transfer
+    else:
+        resize_transfer = transfers.Resize(args.input_size)
+        train_transfers = transforms.Compose([
+            data_augment, resize_transfer, img_transfer
+        ])
+        test_transfers = transforms.Compose([
+            resize_transfer, img_transfer
+        ])
+    y_encoder_args = {
+        'input_size': args.input_size,
+        'ps': args.ps
+    }
     datasets = {
         'train': AllDetectionDataset(
             train_df, transfer=train_transfers, y_encoder_mode='anchor',
-            input_size=args.input_size),
+            **y_encoder_args
+        ),
         'valid': AllDetectionDataset(
             valid_df, transfer=test_transfers,
-            y_encoder_mode='all', input_size=args.input_size
+            y_encoder_mode='all', **y_encoder_args
         ),
         'test': AllDetectionDataset(
             test_df, transfer=test_transfers, y_encoder_mode='all',
-            input_size=args.input_size)
+            **y_encoder_args
+        )
     }
     dataloaders = {
         k: data.DataLoader(
@@ -381,19 +415,23 @@ def main():
         backbone = models.resnet50
     elif args.backbone == 'resnet101':
         backbone = models.resnet101
-    net = RetinaNet(backbone=backbone, normal_init=args.no_normal_init)
+    net = RetinaNet(
+        backbone=backbone, normal_init=args.no_normal_init,
+        cls_bias_init=args.no_bias_init, ps=args.ps
+    )
     net.cuda()
     if args.no_bn_freeze:
         net.freeze_bn()  # ???
-    criterion = FocalLoss()
-    optimizer = optim.SGD(
-        net.parameters(), lr=args.learning_rate,
-        momentum=0.9, weight_decay=1e-4
-    )
+    criterion = FocalLoss(alpha=args.alpha)
+    # optimizer = optim.SGD(
+    #     net.parameters(), lr=args.learning_rate,
+    #     momentum=0.9, weight_decay=1e-4
+    # )
+    optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
     # optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
-    if args.lr_schedular:
+    if args.lr_schedular is not None:
         lr_schedular = optim.lr_scheduler.MultiStepLR(
-            optimizer, [50, 150], gamma=0.1
+            optimizer, args.lr_scheduler, gamma=0.1
         )
     else:
         lr_schedular = None
@@ -401,7 +439,7 @@ def main():
     # 模型训练
     history, (test_loss, test_map) = train(
         net, criterion, optimizer, dataloaders, epoch=args.epoch,
-        lr_schedular=lr_schedular
+        lr_schedular=lr_schedular, clip_norm=args.clip_norm
     )
 
     # 模型保存

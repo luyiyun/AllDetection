@@ -11,7 +11,7 @@ class FocalLoss(nn.Module):
     使用的是普通的bounding box regression（smooth l1 loss），cls loss则使用其
     发明的focal loss。
     '''
-    def __init__(self, num_class=2, alpha=0.25, gamma=2):
+    def __init__(self, num_class=2, alpha=0.75, gamma=2):
         '''
         args:
             num_class，对于object的分类有几类，默认是2；

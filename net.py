@@ -12,7 +12,9 @@ class FPN(nn.Module):
     FPN网络，通过增加额外的top-down feature map和横向连接来提高对于小物体预测的
     能力。
     '''
-    def __init__(self, backbone=resnet50, normal_init=True):
+    def __init__(
+        self, backbone=resnet50, normal_init=True, feature_maps=(3, 4, 5, 6, 7)
+    ):
         '''
         args:
             backbone，torchvision.models中的预训练的模型，现在仅支持resnet
@@ -20,26 +22,37 @@ class FPN(nn.Module):
         '''
         super(FPN, self).__init__()
         self.backbone = backbone(True)
+        self.feature_maps = feature_maps
         # 另外增加的预测大物体的两个feature maps
-        self.conv6 = nn.Conv2d(2048, 256, kernel_size=3, stride=2, padding=1)
-        self.conv7 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+        if 6 in self.feature_maps:
+            self.conv6 = nn.Conv2d(
+                2048, 256, kernel_size=3, stride=2, padding=1)
+        if 7 in self.feature_maps:
+            self.conv7 = nn.Conv2d(
+                256, 256, kernel_size=3, stride=2, padding=1)
         # Lateral layers
-        self.latlayer1 = nn.Conv2d(
-            2048, 256, kernel_size=1, stride=1, padding=0)
-        self.latlayer2 = nn.Conv2d(
-            1024, 256, kernel_size=1, stride=1, padding=0)
-        self.latlayer3 = nn.Conv2d(
-            512, 256, kernel_size=1, stride=1, padding=0)
+        if len(set([5, 4, 3]).intersection(set(self.feature_maps))) != 0:
+            self.latlayer1 = nn.Conv2d(
+                2048, 256, kernel_size=1, stride=1, padding=0)
+        if len(set([4, 3]).intersection(set(self.feature_maps))) != 0:
+            self.latlayer2 = nn.Conv2d(
+                1024, 256, kernel_size=1, stride=1, padding=0)
+        if 3 in self.feature_maps:
+            self.latlayer3 = nn.Conv2d(
+                512, 256, kernel_size=1, stride=1, padding=0)
         # Top-down layers
-        self.toplayer1 = nn.Conv2d(
-            256, 256, kernel_size=3, stride=1, padding=1)
-        self.toplayer2 = nn.Conv2d(
-            256, 256, kernel_size=3, stride=1, padding=1)
+        if len(set([4, 3]).intersection(set(self.feature_maps))) != 0:
+            self.toplayer1 = nn.Conv2d(
+                256, 256, kernel_size=3, stride=1, padding=1)
+        if 3 in self.feature_maps:
+            self.toplayer2 = nn.Conv2d(
+                256, 256, kernel_size=3, stride=1, padding=1)
         if normal_init:
             # 对新增加的layers使用weight=normal(0, 0.01)、bias=0进行初始化
             self.init()
 
     def forward(self, x):
+        results = [None] * 7
         # Bottom-up
         c1 = self.backbone.relu(self.backbone.bn1(self.backbone.conv1(x)))
         c1 = self.backbone.maxpool(c1)
@@ -47,16 +60,28 @@ class FPN(nn.Module):
         c3 = self.backbone.layer2(c2)
         c4 = self.backbone.layer3(c3)
         c5 = self.backbone.layer4(c4)
-        p6 = self.conv6(c5)
-        p7 = self.conv7(F.relu(p6))
+        if 6 in self.feature_maps:
+            p6 = self.conv6(c5)
+            results[-2] = p6
+        if 7 in self.feature_maps:
+            p7 = self.conv7(F.relu(p6))
+            results[-1] = p7
 
         # Top-down
-        p5 = self.latlayer1(c5)
-        p4 = self._upsample_add(p5, self.latlayer2(c4))
-        p4 = self.toplayer1(p4)
-        p3 = self._upsample_add(p4, self.latlayer3(c3))
-        p3 = self.toplayer2(p3)
-        return p3, p4, p5, p6, p7
+        if len(set([5, 4, 3]).intersection(set(self.feature_maps))) != 0:
+            p5 = self.latlayer1(c5)
+            if 5 in self.feature_maps:
+                results[-3] = p5
+        if len(set([4, 3]).intersection(set(self.feature_maps))) != 0:
+            p4 = self._upsample_add(p5, self.latlayer2(c4))
+            p4 = self.toplayer1(p4)
+            if 4 in self.feature_maps:
+                results[-4] = p4
+        if 3 in self.feature_maps:
+            p3 = self._upsample_add(p4, self.latlayer3(c3))
+            p3 = self.toplayer2(p3)
+            results[-5] = p3
+        return tuple([p for p in results if p is not None])
 
     def _upsample_add(self, x, y):
         '''
@@ -79,7 +104,7 @@ class RetinaNet(nn.Module):
     '''
     def __init__(
         self, backbone=resnet50, num_class=2, num_anchors=9, head_bn=False,
-        normal_init=True
+        normal_init=True, cls_bias_init=True, ps=(3, 4, 5, 6, 7), test=False
     ):
         '''
         args:
@@ -88,14 +113,19 @@ class RetinaNet(nn.Module):
             num_anchors，每个输出网格共对应几个anchors；
         '''
         super(RetinaNet, self).__init__()
+        self.test = test
         self.head_bn = head_bn
 
-        self.fpn = FPN(backbone, normal_init=normal_init)
+        self.fpn = FPN(backbone, normal_init=normal_init, feature_maps=ps)
         self.num_class = num_class
         self.num_anchors = num_anchors
         self.loc_head = self._make_head(self.num_anchors * 4)
+        if cls_bias_init:
+            bias_init = -log(0.99 * 0.01)
+        else:
+            bias_init = None
         self.cls_head = self._make_head(
-                self.num_anchors * self.num_class, bias_init=-log(0.99 * 0.01)
+                self.num_anchors * self.num_class, bias_init=bias_init
         )
         if normal_init:
             self.init()
@@ -112,6 +142,8 @@ class RetinaNet(nn.Module):
                 x.size(0), -1, self.num_class)
             loc_preds.append(loc_pred)
             cls_preds.append(cls_pred)
+        if self.test:
+            return cls_preds, loc_preds
         return torch.cat(cls_preds, 1), torch.cat(loc_preds, 1)
 
     def _make_head(self, out_planes, bias_init=None):
@@ -159,12 +191,12 @@ class RetinaNet(nn.Module):
 
 
 def main():
-    net = RetinaNet()
-    for n, m in net.named_modules():
-        print(n)
-    loc_preds, cls_preds = net(torch.rand(2, 3, 224, 224))
-    print(loc_preds.size())
-    print(cls_preds.size())
+    net = RetinaNet(ps=(6, 7), test=True)
+    # for n, m in net.named_modules():
+    #     print(n)
+    cls_preds, loc_preds = net(torch.rand(2, 3, 224, 224))
+    print([i.size() for i in cls_preds])
+    print([i.size() for i in loc_preds])
 
 
 if __name__ == "__main__":

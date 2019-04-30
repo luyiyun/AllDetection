@@ -15,7 +15,7 @@ class YEncoder:
         前景类）的转换
     '''
     def __init__(
-        self, anchor_areas=[(2. ** i) ** 2 for i in range(5, 10)],
+        self, ps=[3, 4, 5, 6, 7],
         aspect_ratios=[1/2., 2/1., 1/1.],
         scale_ratios=[1., pow(2, 1/3.), pow(2, 2/3.)],
         iou_thre=0.5, ignore_thres=(0.4, 0.5), cls_thre=0.5, nms_thre=0.5,
@@ -35,6 +35,8 @@ class YEncoder:
             nms_thres，float，进行nms时使用的阈值；
             input_size：输入图像的大小，是w x h的格式；
         '''
+        self.ps = ps
+        anchor_areas = [(2. ** (i+2)) ** 2 for i in ps]
         self.anchor_areas = anchor_areas
         self.aspect_ratios = aspect_ratios
         self.scale_ratios = scale_ratios
@@ -209,12 +211,12 @@ class YEncoder:
         '''
         num_fms = len(self.anchor_areas)
         boxes = []
-        for i in range(num_fms):
+        for i, p in zip(range(num_fms), self.ps):
             # 每个特征图的大小，这里认为每个特征图依次下采样了2倍
             # 这里要和anchor boxes的大小区分开，anchor的数量主要通过其使用的
             #   feature map上空间点的数量来确定，而anchor boxes的大小是看这个
             #   feature的感受野大小来确定的
-            grid_size = torch.tensor([pow(2., i+3)] * 2, dtype=torch.float)
+            grid_size = torch.tensor([pow(2., p)] * 2, dtype=torch.float)
             fm_size = (input_size / grid_size).ceil()
             fm_w, fm_h = int(fm_size[0]), int(fm_size[1])
             # 计算的坐标是每个空间点在原图对应的矩形的中心点坐标
@@ -267,7 +269,7 @@ def test():
         help='当使用show_encode的时候，只显示IoU最大的几个anchor boxes'
     )
     args = parser.parse_args()
-    y_encoder = YEncoder(input_size=args.input_size)
+    y_encoder = YEncoder(input_size=args.input_size, ps=[3, 4, 5])
     if args.mode == 'show_wh':
         cen = torch.tensor(args.input_size, dtype=torch.float) / 2
         lt = cen - y_encoder.anchor_wh / 2
