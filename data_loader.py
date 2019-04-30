@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import torch
 import xml.etree.ElementTree as ET
-from PIL import Image
+from PIL import Image, ImageFont
 from PIL.ImageDraw import Draw
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import default_collate
@@ -199,7 +199,10 @@ class AllDetectionDataset(Dataset):
 '''
 
 
-def draw_rectangle(img, labels, markers, color_mapper={0: 'green', 1: 'red'}):
+def draw_rectangle(
+    img, labels, markers, color_mapper={0: 'green', 1: 'red'},
+    fonts=None
+):
     '''
     在img上画上标记框，如果labels是概率，则会计算其最大的概率，根据最大的列标
         来表颜色，并把最大的概率写在上面；
@@ -208,19 +211,22 @@ def draw_rectangle(img, labels, markers, color_mapper={0: 'green', 1: 'red'}):
         labels，iterable，是objects的标签；
         markers，iterable，是objects的boxes的loc；
         color_mapper，dict，keys是markers，values是用于draw的颜色；
+        fonts，iterable，是要写在预测框上的文字，如果是None则不加这个；
     returns:
         img，PIL的Image对象，画上标记框的image；
     '''
     draw = Draw(img)
-    # font = ImageFont.truetype(font="C:/Windows/Fonts/Calibar", size=5)
     for label, marker in zip(labels, markers):
-        if labels.ndim == 1:
+        color = color_mapper[label]
+        draw.rectangle(marker.tolist(), outline=color, width=3)
+    if fonts is not None:
+        font_type = ImageFont.truetype('calibri', size=20)
+        for label, marker, font in zip(labels, markers, fonts):
             color = color_mapper[label]
-        else:
-            color = color_mapper[label.argmax()]
-            text_position = (marker[[0, 2]].mean(), marker[[1, 3]].mean())
-            draw.text(text_position, str(label.max()), fill=color)
-        draw.rectangle(marker.tolist(), outline=color, width=5)
+            draw.text(
+                marker[:2].tolist(), str(font), fill=color,
+                font=font_type
+            )
     return img
 
 

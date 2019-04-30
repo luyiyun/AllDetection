@@ -110,7 +110,10 @@ class YEncoder:
             cls_targets = cls_targets[orders]
         return cls_targets, loc_targets
 
-    def decode(self, cls_preds, loc_preds, input_size=None, cuda=True):
+    def decode(
+        self, cls_preds, loc_preds, input_size=None,
+        device=torch.device('cuda:0')
+    ):
         '''
         将网络的输出转化为正常的人们所能理解的标签和boxes
         这里的cls_preds和loc_preds因为是网络的输出，所以其第一个维度是batch
@@ -122,8 +125,8 @@ class YEncoder:
                 #anchors, 4]，#anchors是所有特征图上的所有anchors
             input_size：int/tuple，输入图像的大小，可以是None，此时使用实例化
                 YEncoder对象时候输入的input_size；
-            cuda：是否将anchor_boxes转入cuda，默认是True，只在测试的时候需要
-                它；
+            cuda：anchor_boxes所在的设备，默认是在GPU上，如果是测试和在cpu上进行
+                预测可能需要更改；
         returns:
             labels: list of tensors, 每个tensors的size是[#boxes_i, #classes]，
                 表示的是一张图片中预测框在每一类的logits值；
@@ -134,16 +137,14 @@ class YEncoder:
         if input_size is None:
             input_size = self.input_size
             anchor_boxes = self.anchor_boxes
-            if cuda:
-                anchor_boxes = anchor_boxes.cuda()
+            anchor_boxes = anchor_boxes.to(device)
         else:
             input_size = torch.tensor(
                 [input_size, input_size], dtype=torch.float
             ) if isinstance(input_size, int) else \
                 torch.tensor(input_size, dtype=torch.float)
-            if cuda:
-                anchor_boxes = self._get_anchor_boxes(input_size)
-                anchor_boxes = anchor_boxes.cuda()
+            anchor_boxes = self._get_anchor_boxes(input_size)
+            anchor_boxes = anchor_boxes.to(device)
         if cls_preds.dim() == 3:
             anchor_boxes = anchor_boxes.unsqueeze(0).expand_as(loc_preds)
         # 取出预测的中心偏移量和宽高缩放量
@@ -333,7 +334,8 @@ def test():
         cls_pred = one_hot(cls_pred, 4)[:, 2:]
         cls_pred = cls_pred.to(dtype=torch.float)
         cls_pred, loc_pred = cls_pred.unsqueeze(0), loc_pred.unsqueeze(0)
-        score, box = y_encoder.decode(cls_pred, loc_pred, cuda=False)
+        score, box = y_encoder.decode(
+            cls_pred, loc_pred, device=torch.device('cpu'))
         print('begin:%s, end:%s' % (str(xyxy), str(box)))
         print(
             'sigmoid 1:%s, end:%s' % (

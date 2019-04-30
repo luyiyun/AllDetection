@@ -167,7 +167,10 @@ def train(
     return history
 
 
-def test(net, dataloader, criterion=None, evaluate=True, predict=True):
+def test(
+    net, dataloader, criterion=None, evaluate=True, predict=True,
+    device=torch.device('cuda:0')
+):
     '''
     使用训练好的net进行预测或评价
     args：
@@ -186,8 +189,9 @@ def test(net, dataloader, criterion=None, evaluate=True, predict=True):
     '''
     data_encoder = dataloader.dataset.y_encoder
     y_encoder_mode = dataloader.dataset.y_encoder_mode
-    assert evaluate and y_encoder_mode in ['obj', 'all']
-    assert criterion is not None and y_encoder_mode in ['all', 'anchor']
+    assert (evaluate and y_encoder_mode in ['object', 'all']) or not evaluate
+    assert (criterion is not None and y_encoder_mode in ['all', 'anchor']) or \
+        criterion is None
 
     print('Testing ...')
     results = []
@@ -199,8 +203,8 @@ def test(net, dataloader, criterion=None, evaluate=True, predict=True):
         all_markers_pred = []
         all_labels_true = []
         all_markers_true = []
-        for imgs, labels, markers in dataloader:
-            imgs = imgs.cuda()
+        for imgs, labels, markers in pb.progressbar(dataloader):
+            imgs = imgs.to(device)
             if y_encoder_mode == 'all':
                 # 如果需要计算mAP，则除了dataloader除了输出已经编码好的每个
                 #   anchor对应的偏移量和对应的标签，还需要没有编码的每张图片
@@ -212,19 +216,21 @@ def test(net, dataloader, criterion=None, evaluate=True, predict=True):
                 # cls_trues是一个tensor，(#imgs, #anchors, #class)，是每张图片
                 #   中每个anchor对应的gtbb的类别
                 labels, cls_trues = labels
-                cls_trues = cls_trues.cuda()  # labels in cpu, cls_trues in gpu
+                # labels in cpu, cls_trues in gpu
+                cls_trues = cls_trues.to(device)
                 # markers是list，每个元素是一个tensor，指代一张图片中所有的obj
                 #   的xyxy loc，[(img1#obj, 4), (img2#obj, 4), (img3#obj, 4),
                 #   ...]
                 # loc_trues是一个tensor，(#imgs, #anchors, 4)，是每张图片中每个
                 #   anchor和其对应的gtbb的位置偏移量
                 markers, loc_trues = markers
-                loc_trues = loc_trues.cuda()  # marker in cpu, loc_trues in gpu
+                # marker in cpu, loc_trues in gpu
+                loc_trues = loc_trues.to(device)
             elif y_encoder_mode == 'anchor':
                 # 如果只需要计算loss，则只需要输出编码好的偏移量和anchor的标签
                 #   即可
-                cls_trues = labels.cuda()
-                loc_trues = markers.cuda()
+                cls_trues = labels.to(device)
+                loc_trues = markers.to(device)
 
             cls_preds, loc_preds = net(imgs)
 
@@ -237,7 +243,7 @@ def test(net, dataloader, criterion=None, evaluate=True, predict=True):
             # 使用decode得到的是list，其每个元素是batch中每个图片的预测框的
             #   tensor
             label_preds, marker_preds = data_encoder.decode(
-                cls_preds, loc_preds)
+                cls_preds, loc_preds, device=device)
             # 使用append则输出的的list的len是图片的数量，这样的输出更加明白
             all_markers_pred.append(marker_preds)
             all_labels_pred.append(label_preds)
