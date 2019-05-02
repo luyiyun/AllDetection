@@ -220,7 +220,8 @@ def draw_rectangle(
         color = color_mapper[label]
         draw.rectangle(marker.tolist(), outline=color, width=3)
     if fonts is not None:
-        font_type = ImageFont.truetype('calibri', size=20)
+        font_type = ImageFont.truetype(
+            '/usr/share/fonts/truetype/arphic/ukai.ttc', size=20)
         for label, marker, font in zip(labels, markers, fonts):
             color = color_mapper[label]
             draw.text(

@@ -33,7 +33,8 @@ class YEncoder:
                 在之后的训练中会被丢弃；
             cls_thre，预测时，如果score小于此，则认为这个框被预测为背景；
             nms_thres，float，进行nms时使用的阈值；
-            input_size：输入图像的大小，是w x h的格式；
+            input_size：输入图像的大小，是w x h的格式，或者是单个int，则会被认为
+                是h，然后进行保持宽高比的变换；
         '''
         self.ps = ps
         anchor_areas = [(2. ** (i+2)) ** 2 for i in ps]
@@ -49,10 +50,9 @@ class YEncoder:
         #   这里先对其float变换一下
         if input_size is None:
             input_size = (1920, 1200)
-        self.input_size = torch.tensor(
-            [input_size, input_size], dtype=torch.float
-        ) if isinstance(input_size, int) else \
-            torch.tensor(input_size, dtype=torch.float)
+        elif isinstance(input_size, int):
+            input_size = (1920*input_size/1200, input_size)
+        self.input_size = torch.tensor(input_size, dtype=torch.float)
         self.num_anchor_per_cell = len(aspect_ratios) * len(scale_ratios)
         self.anchor_wh = self._get_anchor_wh()
         self.anchor_boxes = self._get_anchor_boxes(self.input_size)
@@ -82,10 +82,9 @@ class YEncoder:
             input_size = self.input_size
             anchor_boxes = self.anchor_boxes
         else:
-            input_size = torch.tensor(
-                [input_size, input_size], dtype=torch.float
-            ) if isinstance(input_size, int) else \
-                torch.tensor(input_size, dtype=torch.float)
+            if isinstance(input_size, int):
+                input_size = (1920*input_size/1200, input_size)
+            input_size = torch.tensor(input_size, dtype=torch.float)
             anchor_boxes = self._get_anchor_boxes(input_size)
         boxes = change_box_order(boxes, 'xyxy2xywh')
         # 计算每个anchor和每个gtbb间的iou，根据此来给标签
@@ -139,10 +138,9 @@ class YEncoder:
             anchor_boxes = self.anchor_boxes
             anchor_boxes = anchor_boxes.to(device)
         else:
-            input_size = torch.tensor(
-                [input_size, input_size], dtype=torch.float
-            ) if isinstance(input_size, int) else \
-                torch.tensor(input_size, dtype=torch.float)
+            if isinstance(input_size, int):
+                input_size = (1920*input_size/1200, input_size)
+            input_size = torch.tensor(input_size, dtype=torch.float)
             anchor_boxes = self._get_anchor_boxes(input_size)
             anchor_boxes = anchor_boxes.to(device)
         if cls_preds.dim() == 3:

@@ -99,7 +99,7 @@ def train(
                         cls_trues, loc_trues, cls_preds, loc_preds)
                     if phase == 'train':
                         loss.backward()
-                        if clip_norm is not None:
+                        if clip_norm != 0.0:
                             torch.nn.utils.clip_grad_norm_(
                                 net.parameters(), clip_norm)
                         optimizer.step()
@@ -282,29 +282,35 @@ def main():
     parser.add_argument(
         '-bs', '--batch_size', default=2, type=int, help='batch size，默认是2')
     parser.add_argument(
-        '-nj', '--n_jobs', default=4, type=int, help='多核并行的核数，默认是4')
+        '-nj', '--n_jobs', default=6, type=int, help='多核并行的核数，默认是6')
     parser.add_argument(
-        '-is', '--input_size', default=(960, 600), type=int, nargs=2,
-        help='模型接受的输入的大小，需要指定两个，即宽x高，默认是(960, 600)'
+        '-is', '--input_size', default=None, type=int, nargs='+',
+        help=(
+            '模型接受的输入图片的大小，如果指定了1个，则此为短边会resize到的大小'
+            '，在此期间会保证图片的宽高比，如果指定两个，则分别是高和宽，'
+            '默认是None，即不进行resize')
     )
     parser.add_argument(
-        '-lr', '--learning_rate', type=float, default=1e-3,
-        help='学习率，默认是1e-3')
+        '-lr', '--learning_rate', type=float, default=5e-4,
+        help='学习率，默认是0.0005')
     parser.add_argument(
-        '-e', '--epoch', type=int, default=200, help='epoch数，默认是200')
+        '-e', '--epoch', type=int, default=100, help='epoch数，默认是100')
     parser.add_argument(
         '-rs', '--random_seed', default=1234, type=int,
         help='随机种子数，默认是1234'
     )
     parser.add_argument(
-        '-rd', '--root_dir', default='E:/Python/AllDetection/label_boxes',
-        help='数据集所在的根目录，其内部是子文件夹储存图片'
+        '-rd', '--root_dir',
+        default='/home/dl/deeplearning_img/AllDet/label_boxes',
+        help=(
+            '数据集所在的根目录，其内部是子文件夹储存图片, 这里默认是'
+            '/home/dl/deeplearning_img/AllDet/label_boxes')
     )
     parser.add_argument(
-        '--no_bn_freeze', action='store_false',
+        '--bn_freeze', action='store_true',
         help=(
             '是否固定RetinaNet中的BatchNorm中的参数不训练，'
-            '如果使用此命令，则BatchNorm中的参数也会训练'
+            '如果使用此命令，则BatchNorm中的参数将不会训练'
         )
     )
     parser.add_argument(
@@ -324,29 +330,39 @@ def main():
         help='使用的backbone网络，默认是resnet50'
     )
     parser.add_argument(
-        '--no_normal_init', action='store_false',
+        '--normal_init', action='store_true',
         help=(
             '是否使用normal分布来初始化新增加的layer，如果使用此参数，'
-            '则不normal初始化'
+            '则进行normal初始化'
         )
     )
     parser.add_argument(
-        '--alpha', default=0.75, type=float,
-        help='focal loss的参数之一，默认是0.75'
+        '--alpha', default=0.25, type=float,
+        help='focal loss的参数之一，默认是0.25'
     )
     parser.add_argument(
         '--no_bias_init', action='store_false',
         help='如果使用这个参数，则分类头最后一次的bias将不使用特殊的初始化模式'
     )
     parser.add_argument(
-        '-cn', '--clip_norm', default=None, type=float,
-        help='进行梯度截断的参数，默认是None，如果是None则不进行梯度截断'
+        '-cn', '--clip_norm', default=1.0, type=float,
+        help='进行梯度截断的参数，默认是1.0，如果是0.0则不进行梯度截断'
     )
     parser.add_argument(
         '-ps', default=[3, 4, 5, 6, 7], type=int, nargs='+',
         help='使用FPN中的哪些特征图来构建anchors，默认是p3-p7'
     )
     args = parser.parse_args()
+    # 需要对input_size进行比较复杂的处理
+    if isinstance(args.input_size, (tuple, list)):
+        if len(args.input_size) == 1:
+            input_size = args.input_size[0]
+        else:
+            input_size = list(args.input_size)
+    elif args.input_size is None:
+        input_size = None
+    else:
+        raise ValueError('input_size must be one of tuple, list or None')
     # 读取数据根目录，构建data frame
     img_label_dir_pair = []
     for d in os.listdir(args.root_dir):
@@ -378,23 +394,28 @@ def main():
         transfers.RandomFlipTopBottom(),
     ])
     # 注意对于PIL，其输入大小时是w,h的格式
-    if list(args.input_size) == [1920, 1200]:
+    if input_size is None:
         train_transfers = transforms.Compose([
             data_augment, img_transfer
         ])
         test_transfers = img_transfer
     else:
-        resize_transfer = transfers.Resize(args.input_size)
+        # 在PIL中，一般表示图像的两个空间维度时候使用w,h的顺序，但在pytorch中，
+        # 一般使用h,w的顺序，这里使用的Resize是pytorch的对象，所以其接受的是h x
+        # w的顺序
+        resize_transfer = transfers.Resize(input_size)
         train_transfers = transforms.Compose([
             data_augment, resize_transfer, img_transfer
         ])
         test_transfers = transforms.Compose([
             resize_transfer, img_transfer
         ])
-    y_encoder_args = {
-        'input_size': args.input_size,
-        'ps': args.ps
-    }
+    # 这里实际上是送给YEncoder类的参数，需要指定为w x h
+    if isinstance(input_size, list):
+        y_input_size = input_size[::-1]
+    else:
+        y_input_size = input_size
+    y_encoder_args = {'input_size': y_input_size, 'ps': args.ps}
     datasets = {
         'train': AllDetectionDataset(
             train_df, transfer=train_transfers, y_encoder_mode='anchor',
@@ -417,16 +438,18 @@ def main():
     }
 
     # 模型建立
-    if args.backbone == 'resnet50':
-        backbone = models.resnet50
-    elif args.backbone == 'resnet101':
-        backbone = models.resnet101
+    bb_dict = {
+        'resnet50': models.resnet50,
+        'resnet101': models.resnet101,
+        'resnet34': models.resnet34,
+    }
+    backbone = bb_dict[args.backbone]
     net = RetinaNet(
-        backbone=backbone, normal_init=args.no_normal_init,
+        backbone=backbone, normal_init=args.normal_init,
         cls_bias_init=args.no_bias_init, ps=args.ps
     )
     net.cuda()
-    if args.no_bn_freeze:
+    if args.bn_freeze:
         net.freeze_bn()  # ???
     criterion = FocalLoss(alpha=args.alpha)
     # optimizer = optim.SGD(

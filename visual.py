@@ -164,6 +164,7 @@ def main():
             label_pred = labels_pred[i]
             marker_pred = markers_pred[i]
             img = to_pil(img)
+            img = draw_rectangle(img, label.numpy(), marker.numpy())
             if label_pred.numel() == 0:
                 img.save(
                     os.path.join(
@@ -172,7 +173,6 @@ def main():
                 )
             else:
                 proba, idx_pred = label_pred.max(dim=1)
-                img = draw_rectangle(img, label.numpy(), marker.numpy())
                 img = draw_rectangle(
                     img, idx_pred.cpu().numpy(), marker_pred.cpu().numpy(),
                     color_mapper={0: 'blue', 1: 'yellow'},
