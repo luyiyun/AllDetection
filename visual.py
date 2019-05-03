@@ -34,18 +34,24 @@ def main():
     parser.add_argument(
         '-bs', '--batch_size', default=2, type=int, help='batch size，默认是2')
     parser.add_argument(
-        '-nj', '--n_jobs', default=4, type=int, help='多核并行的核数，默认是4')
+        '-nj', '--n_jobs', default=6, type=int, help='多核并行的核数，默认是6')
     parser.add_argument(
-        '-is', '--input_size', default=(960, 600), type=int, nargs=2,
-        help='模型接受的输入的大小，需要指定两个，即宽x高，默认是(960, 600)'
+        '-is', '--input_size', default=None, type=int, nargs='+',
+        help=(
+            '模型接受的输入图片的大小，如果指定了1个，则此为短边会resize到的大小'
+            '，在此期间会保证图片的宽高比，如果指定两个，则分别是高和宽，'
+            '默认是None，即不进行resize')
     )
     parser.add_argument(
         '-rs', '--random_seed', default=1234, type=int,
         help='随机种子数，默认是1234'
     )
     parser.add_argument(
-        '-rd', '--root_dir', default='E:/Python/AllDetection/label_boxes',
-        help='数据集所在的根目录，其内部是子文件夹储存图片'
+        '-rd', '--root_dir',
+        default='/home/dl/deeplearning_img/AllDet/label_boxes',
+        help=(
+            '数据集所在的根目录，其内部是子文件夹储存图片, 这里默认是'
+            '/home/dl/deeplearning_img/AllDet/label_boxes')
     )
     parser.add_argument(
         '--no_normalize', action='store_false',
@@ -75,7 +81,21 @@ def main():
         '-sr', '--save_root', default='./results',
         help='结果保存的根目录，默认是./results'
     )
+    parser.add_argument(
+        '--top_k', default=0, type=int,
+        help="使用的是排名第几的模型进行预测，默认是0"
+    )
     args = parser.parse_args()
+    # 需要对input_size进行比较复杂的处理
+    if isinstance(args.input_size, (tuple, list)):
+        if len(args.input_size) == 1:
+            input_size = args.input_size[0]
+        else:
+            input_size = list(args.input_size)
+    elif args.input_size is None:
+        input_size = None
+    else:
+        raise ValueError('input_size must be one of tuple, list or None')
 
     img_label_dir_pair = []
     for d in os.listdir(args.root_dir):
@@ -111,17 +131,22 @@ def main():
     ])
     img_transfer = transfers.OnlyImage(img_transfer)
     # 注意对于PIL，其输入大小时是w,h的格式
-    if list(args.input_size) == [1920, 1200]:
+    if input_size is None:
         test_transfers = img_transfer
     else:
-        resize_transfer = transfers.Resize(args.input_size)
+        # 在PIL中，一般表示图像的两个空间维度时候使用w,h的顺序，但在pytorch中，
+        # 一般使用h,w的顺序，这里使用的Resize是pytorch的对象，所以其接受的是h x
+        # w的顺序
+        resize_transfer = transfers.Resize(input_size)
         test_transfers = transforms.Compose([
             resize_transfer, img_transfer
         ])
-    y_encoder_args = {
-        'input_size': args.input_size,
-        'ps': args.ps
-    }
+    # 这里实际上是送给YEncoder类的参数，需要指定为w x h
+    if isinstance(input_size, list):
+        y_input_size = input_size[::-1]
+    else:
+        y_input_size = input_size
+    y_encoder_args = {'input_size': y_input_size, 'ps': args.ps}
     use_data = AllDetectionDataset(
         use_dat, transfer=test_transfers, y_encoder_mode='object',
         **y_encoder_args)
@@ -135,9 +160,10 @@ def main():
     elif args.backbone == 'resnet101':
         backbone = models.resnet101
     net = RetinaNet(backbone=backbone, ps=args.ps)
-    state_dict = torch.load(
+    bests = torch.load(
         os.path.join(args.save_root, args.model, 'model.pth')
     )
+    state_dict = bests[args.top_k]['model_wts']
     net.load_state_dict(state_dict)
     net.eval()
 
