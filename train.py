@@ -21,9 +21,80 @@ from losses import FocalLoss
 from metrics import mAP
 
 
+class History:
+    '''
+    用于储存训练时期结果的对象，其中其有两个最重要的属性：history和best
+    history，是一个dict或df，用于储存在训练时期loss和mAP的信息；
+    best，用于储存当前训练阶段最好的t个模型及其metrics；
+    '''
+    def __init__(self, best_num=3, best_metric='mAP', min_better=False):
+        self.best_metric = best_metric
+        self.verse_f = np.less if min_better else np.greater
+        self.history = {
+            'loss': [], 'cls_loss': [], 'loc_loss': [],
+            'val_loss': [], 'val_cls_loss': [], 'val_loc_loss': [],
+            'mAP': []
+        }
+        self.hist_keys = self.history.keys()
+        self.best = [
+            {
+                'mAP': 0., 'loss': float('inf'), 'cls_loss': float('inf'),
+                'loc_loss': float('inf'), 'epoch': -1, 'model_wts': None
+            } for _ in range(best_num)
+        ]
+        self.best_keys = set(self.best[0].keys())
+        # self.best_keys_alt = copy.deepcopy(self.best_keys)
+        # self.best_keys_alt.remove('model_wts')
+        # self.best_keys_alt.add('model')
+
+    def update_best(self, **kwargs):
+        '''
+        将本次得到的结果更新到best属性中
+        args是self.best的keys，包括mAP、loss、cls_loss、loc_loss、epoch和
+            model_wts，其中model_wts是model的state_dict的deepcopy值
+        这里需要注意的是，需要将所有要更新的参数都写上，不然会报错。
+        '''
+        self.compare_keys(kwargs.keys(), 'best')  # 检查输入是否符合格式
+        best_scores = [b[self.best_metric] for b in self.best]
+        new_score = kwargs[self.best_metric]
+        for i, bs in enumerate(best_scores):
+            if self.verse_f(new_score, bs):
+                self.best.insert(i, kwargs)
+                self.best.pop()
+                break
+
+    def update_hist(self, **kwargs):
+        '''
+        更新history属性
+        '''
+        # self.compare_keys(kwargs.keys(), 'hist')
+        # 因为hist的内容需要分别在train和valid阶段进行更新，所以一次更新是无法
+        #   完成的，就没有设置检查机制
+        for k, v in kwargs.items():
+            self.history[k].append(v)
+
+    def compare_keys(self, new_keys, func='best'):
+        '''
+        检查输入是否符合格式，即是否是我们要求的那些keys；
+        args:
+            new_keys，是输入的参数名；
+            func，我们要比较的是哪个函数的参数s，可以选择best or hist；
+        '''
+        new_keys = set(new_keys)
+        if func == 'best':
+            old_keys = self.best_keys
+        elif func == 'hist':
+            old_keys = self.hist_keys
+        diff = len(new_keys.symmetric_difference(old_keys))
+        if diff > 0:
+            raise ValueError(
+                '输入的参数和要求的不一致，要求的参数是%s' % str(old_keys)
+            )
+
+
 def train(
     net, criterion, optimizer, dataloaders, epoch, lr_schedular=None,
-    clip_norm=None
+    clip_norm=None, best_num=1, best_metric='mAP', history=History()
 ):
     '''
     对RetinaNet进行训练，
@@ -36,20 +107,24 @@ def train(
         epoch，int，一共需要进行多少个epoch的训练；
         lr_schedular，使用的学习率策略；
         clip_norm, 使用的梯度截断的参数，如果是None则不进行梯度截断；
+        best_num，要保存的最好的模型的数目；
+        best_metric，来判断模型好坏的指标，可以选择mAP或loss；
+        history，History对象，用于储存训练时期的结果，默认是History()的默认配置；
     returns：
-        history，dict，储存每个epoch train的loss和valid的loss、mAP；
+        history，History对象，储存每个epoch train的loss和valid的loss、mAP和最好
+            的几个模型；
         （另外，实际上输入的net会发生改变，成为在训练过程中valid上最好的net）
         test_loss, test_mAP，如果有dataloaders中还有test，则会返回；
     '''
     # 训练开始的时候需要初始化的一些值
-    history = {
-        'loss': [], 'cls_loss': [], 'loc_loss': [],
-        'val_loss': [], 'val_cls_loss': [], 'val_loc_loss': [],
-        'mAP': []
-    }
-    best_loss = float('inf')
-    best_map = 0.
-    best_model_wts = copy.deepcopy(net.state_dict())
+    # history = {
+    #     'loss': [], 'cls_loss': [], 'loc_loss': [],
+    #     'val_loss': [], 'val_cls_loss': [], 'val_loc_loss': [],
+    #     'mAP': []
+    # }
+    # best_loss = float('inf')
+    # best_map = 0.
+    # best_model_wts = copy.deepcopy(net.state_dict())
     for e in range(epoch):
         if 'valid' in dataloaders.keys():
             phases = ['train', 'valid']
@@ -121,9 +196,10 @@ def train(
                 epoch_cls_loss /= num_batches
                 epoch_loc_loss /= num_batches
                 if phase == 'train':
-                    history['loss'].append(epoch_loss)
-                    history['cls_loss'].append(epoch_cls_loss)
-                    history['loc_loss'].append(epoch_loc_loss)
+                    history.update_hist(
+                        loss=epoch_loss, cls_loss=epoch_cls_loss,
+                        loc_loss=epoch_loc_loss
+                    )
                     print(
                         '%s, loss: %.4f, cls_loss: %.4f, loc_loss: %.4f' %
                         (phase, epoch_loss, epoch_cls_loss, epoch_loc_loss)
@@ -132,16 +208,17 @@ def train(
                     _, map_score = mAP(
                         all_label_trues, all_marker_trues,
                         all_label_preds, all_marker_preds)
-                    history['val_loss'].append(epoch_loss)
-                    history['val_cls_loss'].append(epoch_cls_loss)
-                    history['val_loc_loss'].append(epoch_loc_loss)
-                    history['mAP'].append(map_score)
+                    history.update_hist(
+                        val_loss=epoch_loss, val_cls_loss=epoch_cls_loss,
+                        val_loc_loss=epoch_loc_loss, mAP=map_score
+                    )
                     if map_score is np.nan:
                         map_score = 0
-                    if map_score > best_map:
-                        best_map = map_score
-                        best_loss = epoch_loss
-                        best_model_wts = copy.deepcopy(net.state_dict())
+                    history.update_best(
+                        mAP=map_score, loss=epoch_loss,
+                        cls_loss=epoch_cls_loss, loc_loss=epoch_loc_loss,
+                        epoch=e, model_wts=copy.deepcopy(net.state_dict())
+                    )
                     print(
                         ('%s, loss: %.4f, cls_loss: %.4f,'
                          ' loc_loss: %.4f, mAP: %.4f') %
@@ -152,8 +229,11 @@ def train(
                     )
 
     if 'valid' in dataloaders.keys():
-        net.load_state_dict(best_model_wts)
-        print('valid best loss: %.4f, best mAP: %.4f' % (best_loss, best_map))
+        net.load_state_dict(history.best[0]['model_wts'])
+        print(
+            'valid best loss: %.4f, best mAP: %.4f' %
+            (history.best[0]['loss'], history.best[0]['mAP'])
+        )
 
     # 如果有test，则再进行test的预测
     if 'test' in dataloaders.keys():
@@ -352,6 +432,18 @@ def main():
         '-ps', default=[3, 4, 5, 6, 7], type=int, nargs='+',
         help='使用FPN中的哪些特征图来构建anchors，默认是p3-p7'
     )
+    parser.add_argument(
+        '--best_num', default=3, type=int,
+        help="保存最好的模型的数目，默认是3"
+    )
+    parser.add_argument(
+        '--best_metric', default='mAP',
+        help="判断模型好坏的指标，可以选择的指标有mAP和loss，默认是mAP"
+    )
+    parser.add_argument(
+        '-o', '--optimizer', default='adam',
+        help="使用的迭代器，默认是adam"
+    )
     args = parser.parse_args()
     # 需要对input_size进行比较复杂的处理
     if isinstance(args.input_size, (tuple, list)):
@@ -452,12 +544,13 @@ def main():
     if args.bn_freeze:
         net.freeze_bn()  # ???
     criterion = FocalLoss(alpha=args.alpha)
-    # optimizer = optim.SGD(
-    #     net.parameters(), lr=args.learning_rate,
-    #     momentum=0.9, weight_decay=1e-4
-    # )
-    optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
-    # optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
+    if args.optimizer == 'sgd':
+        optimizer = optim.SGD(
+            net.parameters(), lr=args.learning_rate,
+            momentum=0.9, weight_decay=1e-4
+        )
+    elif args.optimizer == 'adam':
+        optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
     if args.lr_schedular is not None:
         lr_schedular = optim.lr_scheduler.MultiStepLR(
             optimizer, args.lr_scheduler, gamma=0.1
@@ -468,15 +561,17 @@ def main():
     # 模型训练
     history, (test_loss, test_map) = train(
         net, criterion, optimizer, dataloaders, epoch=args.epoch,
-        lr_schedular=lr_schedular, clip_norm=args.clip_norm
+        lr_schedular=lr_schedular, clip_norm=args.clip_norm,
+        history=History(
+            args.best_num, args.best_metric, args.best_metric == 'loss')
     )
 
     # 模型保存
     save_dir = os.path.join(args.save_root, args.save)
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
-    state_dict = copy.deepcopy(net.state_dict())
-    torch.save(state_dict, os.path.join(save_dir, 'model.pth'))
+    # state_dict = copy.deepcopy(net.state_dict())
+    torch.save(history.best, os.path.join(save_dir, 'model.pth'))
 
     test_res = {
             k: v for k, v in zip(['loss', 'cls_loss', 'loc_loss'], test_loss)}
@@ -485,7 +580,7 @@ def main():
     with open(os.path.join(save_dir, 'test.json'), 'w') as f:
         json.dump(test_res, f)
 
-    train_df = pd.DataFrame(history)
+    train_df = pd.DataFrame(history.history)
     train_df.to_csv(os.path.join(save_dir, 'train.csv'))
 
 
