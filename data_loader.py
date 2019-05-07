@@ -1,25 +1,23 @@
 import os
-import sys
-import platform
 
-import numpy as np
 import pandas as pd
 import torch
 import xml.etree.ElementTree as ET
-from PIL import Image, ImageFont
-from PIL.ImageDraw import Draw
+from PIL import Image
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import default_collate
-import matplotlib.pyplot as plt
 
 from data_encoder import YEncoder
 
 
-def xml_to_markers(file_path):
+def xml_to_markers(
+    file_path, label_correct={'ASC_H': 'ASC-H', 'ASC_US': 'ASC-US'}
+):
     '''
     从xml文件中读取标签和位置信息，这一个xml文件是对一张图片的标记信息；
     args:
         file_path，xml文件的路径；
+        label_correct，有些标签标错了，比如下划线和-不分，这里进行纠正；
     returns:
         labels，list，每个元素是这一张图片所有的objs的标签，字符串；
         postitions，list，每个元素是一个4-list，为xyxy格式，int；
@@ -33,6 +31,8 @@ def xml_to_markers(file_path):
         label = element.findtext('name')
         bndbox = element.find('bndbox')
         position = [int(bndbox.findtext(tag)) for tag in postition_tag]
+        if label in label_correct.keys():
+            label = label_correct[label]
         labels.append(label)
         postitions.append(position)
     return labels, postitions
@@ -49,19 +49,19 @@ def pil_loader(img_f):
     return Image.open(img_f)
 
 
-def _check(name, label_f, img_dir):
+def _check(img_fs, xml_fs, img_dir):
     '''
     对标记文件的集合和图像文件的集合进行检查，看是否能够完全对上，如果对不上，
         则返回错误；
     args:
-        name，图像的文件名列表；
-        label_f，xml文件的文件名列表；
+        img_fs，图像的文件名列表；
+        xml_fs，xml文件的文件名列表；
         img_dir，所在的文件夹路径；
     returns:
         None
     '''
-    img_set = set(name)
-    label_set = set([f[:-4] for f in label_f])
+    img_set = set(img_fs)
+    label_set = set(xml_fs)
     symmetric_difference = img_set.symmetric_difference(label_set)
     if len(symmetric_difference) > 0:
         raise ValueError(
@@ -69,33 +69,67 @@ def _check(name, label_f, img_dir):
             (img_dir, str(symmetric_difference)))
 
 
-def get_data_df(img_label_dir_pair, check=False):
+def get_data_df(
+    root_dir, check=False, drop_nonobjects=True, img_type=['jpg', 'png'],
+    check_labels=False,
+):
     '''
     得到一个DataFrame，储存有图片和标签文件的对应信息；
     args:
-        img_label_dir_pair，其是一个list，每个元素是一个2-tuple，是两个文件夹路
-            径，前一个是储存有图片的文件夹路径，后一个是储存有相应标签的文件夹
-            路径，可能有多个这样的文件夹pair；
+        root_dir, 储存文件的总目录；
         check，是否对文件夹pair间的文件名进行检查，看标签和图像间是否对的上；
+        drop_nonobjects，是否把没有objects的样本丢弃；
+        img_type，使用的图片的格式；
+        check_labels，如果是True，则会遍历一遍labels看看有哪些类；
     returns:
-        df
+        set，所有类别组成的set；
+        df，2-columns的df；
     '''
-    sample_files = []
-    for img_dir, label_dir in img_label_dir_pair:
-        names = []
-        for f in os.listdir(img_dir):
-            if f.endswith('jpg'):
-                name = f[:-4]
-                names.append(name)
-                img_f = os.path.join(img_dir, f)
-                label_f = os.path.join(label_dir, name+'.xml')
-                sample_files.append((img_f, label_f))
-        if check:
-            _check(names, list(os.listdir(label_dir)), img_dir)
-    return pd.DataFrame(sample_files, columns=['img', 'label'])
+    img_files = []
+    xml_files = []
+    labels_set = set()
+    # 遍历root_dir下的所有子文件下的文件，如果该子文件夹存在outputs文件夹，
+    #   则认为此文件夹内正是保存图片的文件夹，将其中的jpg文件路径保存到list
+    #   另外把该jpg文件对应的xml文件路径进行保存
+    for d, folders, files in os.walk(root_dir):
+        if 'outputs' in folders:
+            xml_dir = os.path.join(d, 'outputs')
+            # 当前路径下的jpg文件名和outputs文件夹中的xml文件名是否一致，
+            #   如果不一致则返回error
+            if check:
+                jpg_file_names = [
+                    f[:-4] for f in files if f.endswith(tuple(img_type))
+                ]
+                xml_file_names = [
+                    f[:-4] for f in os.listdir(xml_dir)
+                    if f.endswith('xml')
+                ]
+                _check(jpg_file_names, xml_file_names, d)
+            for f in files:
+                if f.endswith(tuple(img_type)):
+                    xml_f = os.path.join(d, 'outputs', f[:-4]+'.xml')
+                    if drop_nonobjects or check_labels:
+                        labels, markers = xml_to_markers(xml_f)
+                        # 是否收集所有的类别
+                        if check_labels:
+                            labels_set = labels_set.union(set(labels))
+                        # 是否要把没有标记的样本丢弃
+                        if drop_nonobjects:
+                            if len(labels) > 0:
+                                img_files.append(os.path.join(d, f))
+                                xml_files.append(xml_f)
+                        else:
+                            img_files.append(os.path.join(d, f))
+                            xml_files.append(xml_f)
+                    else:
+                        img_files.append(os.path.join(d, f))
+                        xml_files.append(xml_f)
+    if check_labels:
+        return pd.DataFrame({'img': img_files, 'label': xml_files}), labels_set
+    return pd.DataFrame({'img': img_files, 'label': xml_files})
 
 
-class AllDetectionDataset(Dataset):
+class ColabeledDataset(Dataset):
     '''
     建立用于RetinaNet训练的数据集
     '''
@@ -139,8 +173,9 @@ class AllDetectionDataset(Dataset):
         img_f, label_f = self.df.iloc[idx, :].values
         img = self.img_loader(img_f)
         labels, markers = xml_to_markers(label_f)
-        labels = torch.tensor([self.label_mapper[l] for l in labels])
-        markers = torch.tensor(markers, dtype=torch.float)
+        if self.label_mapper is not None:
+            labels = torch.tensor([self.label_mapper[l] for l in labels])
+            markers = torch.tensor(markers, dtype=torch.float)
         if self.transfer is not None:
             img, labels, markers = self.transfer([img, labels, markers])
         if self.y_encoder_mode == 'all':
@@ -194,67 +229,71 @@ class AllDetectionDataset(Dataset):
             )
 
 
-'''
-以下是关于本模块测试的函数
-'''
-
-
-def draw_rectangle(
-    img, labels, markers, color_mapper={0: 'green', 1: 'red'},
-    fonts=None
-):
-    '''
-    在img上画上标记框，如果labels是概率，则会计算其最大的概率，根据最大的列标
-        来表颜色，并把最大的概率写在上面；
-    args:
-        img，PIL的Image对象；
-        labels，iterable，是objects的标签；
-        markers，iterable，是objects的boxes的loc；
-        color_mapper，dict，keys是markers，values是用于draw的颜色；
-        fonts，iterable，是要写在预测框上的文字，如果是None则不加这个；
-    returns:
-        img，PIL的Image对象，画上标记框的image；
-    '''
-    draw = Draw(img)
-    for label, marker in zip(labels, markers):
-        color = color_mapper[label]
-        draw.rectangle(marker.tolist(), outline=color, width=3)
-    if fonts is not None:
-        font_type = ImageFont.truetype(
-            '/usr/share/fonts/truetype/arphic/ukai.ttc', size=20)
-        for label, marker, font in zip(labels, markers, fonts):
-            color = color_mapper[label]
-            draw.text(
-                marker[:2].tolist(), str(font), fill=color,
-                font=font_type
-            )
-    return img
-
-
 def main():
-    if platform.system() == 'Windows':
-        root_dir = 'E:/Python/AllDetection/label_boxes'
-    else:
-        root_dir = '/home/dl/deeplearning_img/AllDet/label_boxes'
-    img_label_dir_pair = []
-    for d in os.listdir(root_dir):
-        img_dir = os.path.join(root_dir, d)
-        label_dir = os.path.join(root_dir, d, 'outputs')
-        img_label_dir_pair.append((img_dir, label_dir))
+    import argparse
 
-    data_df = get_data_df(img_label_dir_pair, check=True)
-    if len(sys.argv) == 1:
-        dataset = AllDetectionDataset(data_df, input_size=(1200, 1920))
+    from visual import draw_rectangle
+
+    color_list = [
+        'red', 'blue', 'yellow', 'pink'
+    ]
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        'root_dir', default='E:/Python/AllDetection/label_boxes',
+        nargs='?', help='保存数据的根目录，默认是E:/Python/AllDetection/label_boxes'
+    )
+    parser.add_argument(
+        '-is', '--image_size', default=(1200, 1920), nargs=2, type=int,
+        help='输入图片的大小，默认是1200、1920，需要输入2个，是H x W'
+    )
+    parser.add_argument(
+        '-c', '--check', action='store_true',
+        help="是否进行检查，如果使用此参数则进行检查，看xml文件和img文件是否一致"
+    )
+    parser.add_argument(
+        '-m', '--mode', default='img', choices=['img', 'encode'],
+        help="进行哪些的展示，默认是img，即将图片画出并把gtbb画上去"
+    )
+    parser.add_argument(
+        '-it', '--image_type', default='jpg', help='图片后缀，默认是jpg')
+    parser.add_argument(
+        '-fs', '--figsize', default=(20, 10), nargs='+', type=int,
+        help='用plt画图的figsize，默认是20、10'
+    )
+    parser.add_argument(
+        '-dno', '--drop_nonobjects', action='store_true',
+        help='如果使用此参数，则不会包括没有标记的图像'
+    )
+    args = parser.parse_args()
+
+    # 我们并不知道objects一共有多少类，所以这里需要使用check_labels来遍历一般xml
+    #   得到所有的objects类别组成的set
+    data_df, labels_set = get_data_df(
+        args.root_dir, check=args.check, img_type=args.image_type,
+        check_labels=True, drop_nonobjects=args.drop_nonobjects
+    )
+    print(labels_set)
+    if args.mode == 'img':
+        color_mapper = {l: color_list[i] for i, l in enumerate(labels_set)}
+        dataset = ColabeledDataset(
+            data_df, label_mapper=None, transfer=None, y_encoder_mode='object',
+            input_size=args.image_size
+        )
+        print(len(dataset))
         for i in range(len(dataset)):
             img, labels, markers = dataset[i]
             print(markers)
-            img = draw_rectangle(img, labels.numpy(), markers.numpy())
-            fig, ax = plt.subplots(figsize=(20, 10))
-            ax.imshow(np.asarray(img))
-            plt.show()
-    else:
-        dataset = AllDetectionDataset(
-            data_df, y_encoder_mode='all', input_size=(1200, 1920))
+            img = draw_rectangle(img, labels, markers, color_mapper, labels)
+            img.show()
+            action = input('n is next, q is quit:')
+            if action == 'q':
+                break
+    elif args.mode == 'encode':
+        label_mapper = {l: i for i, l in enumerate(labels_set)}
+        dataset = ColabeledDataset(
+            data_df, y_encoder_mode='all', label_mapper=label_mapper,
+            transfer=None, input_size=args.image_size,
+        )
         img, labels, markers = dataset[1]
         print(labels)
         print(markers)

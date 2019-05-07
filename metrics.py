@@ -8,7 +8,7 @@ import sklearn.metrics as skm
 import matplotlib.pyplot as plt
 
 from utils import box_iou
-from data_loader import get_data_df, AllDetectionDataset, draw_rectangle
+from data_loader import get_data_df, ColabeledDataset
 
 
 def compute_ap(recall, precision):
@@ -191,6 +191,8 @@ def simulate_markers(true_markers, shape_ratio=(0.8, 1.2)):
 
 
 def test():
+    from visual import draw_rectangle
+
     if platform.system() == 'Windows':
         root_dir = 'E:/Python/AllDetection/label_boxes'
     else:
@@ -202,56 +204,43 @@ def test():
         img_label_dir_pair.append((img_dir, label_dir))
 
     data_df = get_data_df(img_label_dir_pair, check=True)
-    if len(sys.argv) == 1:
-        dataset = AllDetectionDataset(data_df, input_size=(1200, 1920))
-        for i in range(99, 109):
-            img, labels, markers = dataset[i]
-            print(labels)
-            print(markers)
-            img = draw_rectangle(img, labels.numpy(), markers.numpy())
-            fig, ax = plt.subplots(figsize=(20, 10))
-            ax.imshow(np.asarray(img))
-            plt.show()
-            if i == 4:
-                break
-    else:
-        if sys.argv[1] == 'simulate_good':
-            score_ratio = (0.4, 1.0)
-            loc_ratio = (0.8, 1.2)
-        elif sys.argv[1] == 'simulate_bad_score':
-            score_ratio = (0.4, 0.6)
-            loc_ratio = (0.8, 1.2)
-        elif sys.argv[1] == 'simulate_bad_loc':
-            score_ratio = (0.4, 1.0)
-            loc_ratio = (0.4, 2.0)
-        dataset = AllDetectionDataset(data_df, input_size=(1200, 1920))
-        imgs = []
-        true_labels = []
-        true_markers = []
-        simu_labels = []
-        simu_markers = []
-        for i in range(99, 109):
-            img, labels, markers = dataset[i]
-            imgs.append(img)
-            true_labels.append(labels.cuda())
-            true_markers.append(markers.cuda())
+    if sys.argv[1] == 'simulate_good':
+        score_ratio = (0.4, 1.0)
+        loc_ratio = (0.8, 1.2)
+    elif sys.argv[1] == 'simulate_bad_score':
+        score_ratio = (0.4, 0.6)
+        loc_ratio = (0.8, 1.2)
+    elif sys.argv[1] == 'simulate_bad_loc':
+        score_ratio = (0.4, 1.0)
+        loc_ratio = (0.4, 2.0)
+    dataset = ColabeledDataset(data_df, input_size=(1200, 1920))
+    imgs = []
+    true_labels = []
+    true_markers = []
+    simu_labels = []
+    simu_markers = []
+    for i in range(99, 109):
+        img, labels, markers = dataset[i]
+        imgs.append(img)
+        true_labels.append(labels.cuda())
+        true_markers.append(markers.cuda())
 
-            simu_labels.append(simulate_labels(labels, *score_ratio).cuda())
-            simu_markers.append(simulate_markers(markers, loc_ratio).cuda())
+        simu_labels.append(simulate_labels(labels, *score_ratio).cuda())
+        simu_markers.append(simulate_markers(markers, loc_ratio).cuda())
 
-            # img = draw_rectangle(
-            # img, simu_labels[-1].cpu().numpy(),
-            # simu_markers[-1].cpu().numpy())
-            # fig, ax = plt.subplots(figsize=(20, 10))
-            # ax.imshow(np.asarray(img))
-            # plt.show()
-        map_score1 = mAP(
-            true_labels, true_markers, simu_labels, simu_markers,
-            iou_thre=0.5, num_class=2, ap_func=compute_ap)
-        map_score2 = mAP(
-            true_labels, true_markers, simu_labels, simu_markers,
-            iou_thre=0.5, num_class=2, ap_func=skm.auc)
-        print(map_score1, map_score2)
+        # img = draw_rectangle(
+        # img, simu_labels[-1].cpu().numpy(),
+        # simu_markers[-1].cpu().numpy())
+        # fig, ax = plt.subplots(figsize=(20, 10))
+        # ax.imshow(np.asarray(img))
+        # plt.show()
+    map_score1 = mAP(
+        true_labels, true_markers, simu_labels, simu_markers,
+        iou_thre=0.5, num_class=2, ap_func=compute_ap)
+    map_score2 = mAP(
+        true_labels, true_markers, simu_labels, simu_markers,
+        iou_thre=0.5, num_class=2, ap_func=skm.auc)
+    print(map_score1, map_score2)
 
 
 if __name__ == "__main__":
