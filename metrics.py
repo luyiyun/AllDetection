@@ -5,7 +5,6 @@ import platform
 import numpy as np
 import torch
 import sklearn.metrics as skm
-import matplotlib.pyplot as plt
 
 from utils import box_iou
 from data_loader import get_data_df, ColabeledDataset
@@ -191,8 +190,6 @@ def simulate_markers(true_markers, shape_ratio=(0.8, 1.2)):
 
 
 def test():
-    from visual import draw_rectangle
-
     if platform.system() == 'Windows':
         root_dir = 'E:/Python/AllDetection/label_boxes'
     else:

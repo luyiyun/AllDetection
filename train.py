@@ -101,7 +101,8 @@ class History:
 
 def train(
     net, criterion, optimizer, dataloaders, epoch, lr_schedular=None,
-    clip_norm=None, best_num=1, best_metric='mAP', history=History()
+    clip_norm=None, best_num=1, best_metric='mAP', history=History(),
+    num_class=2
 ):
     '''
     对RetinaNet进行训练，
@@ -214,7 +215,8 @@ def train(
                 elif phase == 'valid':
                     _, map_score = mAP(
                         all_label_trues, all_marker_trues,
-                        all_label_preds, all_marker_preds)
+                        all_label_preds, all_marker_preds, num_class=num_class
+                    )
                     history.update_hist(
                         val_loss=epoch_loss, val_cls_loss=epoch_cls_loss,
                         val_loc_loss=epoch_loc_loss, mAP=map_score
@@ -246,7 +248,7 @@ def train(
     if 'test' in dataloaders.keys():
         test_loss, test_map = test(
             net, dataloaders['test'], criterion=criterion, evaluate=True,
-            predict=False
+            predict=False, num_class=num_class
         )
         print('test loss: %.4f, test mAP: %.4f' % (test_loss[0], test_map[1]))
         return history, (test_loss, test_map)
@@ -256,7 +258,7 @@ def train(
 
 def test(
     net, dataloader, criterion=None, evaluate=True, predict=True,
-    device=torch.device('cuda:0')
+    device=torch.device('cuda:0'), num_class=2
 ):
     '''
     使用训练好的net进行预测或评价
@@ -351,6 +353,7 @@ def test(
                 list(chain.from_iterable(all_markers_true)),
                 list(chain.from_iterable(all_labels_pred)),
                 list(chain.from_iterable(all_markers_pred)),
+                num_class=num_class
             )
             results.append((APs, mAP_score))
     return tuple(results)
@@ -543,12 +546,13 @@ def main():
     backbone = bb_dict[args.backbone]
     net = RetinaNet(
         backbone=backbone, normal_init=args.normal_init,
-        cls_bias_init=args.no_bias_init, ps=args.ps
+        cls_bias_init=args.no_bias_init, ps=args.ps,
+        num_class=len(label_mapper)
     )
     net.cuda()
     if args.bn_freeze:
         net.freeze_bn()  # ???
-    criterion = FocalLoss(alpha=args.alpha)
+    criterion = FocalLoss(alpha=args.alpha, num_class=len(label_mapper))
     if args.optimizer == 'sgd':
         optimizer = optim.SGD(
             net.parameters(), lr=args.learning_rate,
@@ -567,6 +571,7 @@ def main():
     history, (test_loss, test_map) = train(
         net, criterion, optimizer, dataloaders, epoch=args.epoch,
         lr_schedular=lr_schedular, clip_norm=args.clip_norm,
+        num_class=len(label_mapper),
         history=History(
             args.best_num, args.best_metric, args.best_metric == 'loss')
     )
