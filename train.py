@@ -1,6 +1,7 @@
 import os
 import copy
 import json
+import platform
 from itertools import chain
 
 import numpy as np
@@ -19,6 +20,12 @@ import transfers
 from net import RetinaNet
 from losses import FocalLoss
 from metrics import mAP
+
+
+def default_rd():
+    if platform.system() == 'Windows':
+        return 'E:/Python/AllDetection/label_boxes'
+    return '/home/dl/deeplearning_img/AllDet/label_boxes'
 
 
 class History:
@@ -380,8 +387,7 @@ def main():
         help='随机种子数，默认是1234'
     )
     parser.add_argument(
-        '-rd', '--root_dir',
-        default='/home/dl/deeplearning_img/AllDet/label_boxes',
+        '-rd', '--root_dir', default=default_rd(),
         help=(
             '数据集所在的根目录，其内部是子文件夹储存图片, 这里默认是'
             '/home/dl/deeplearning_img/AllDet/label_boxes')
