@@ -553,7 +553,7 @@ def main():
         optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
     if args.lr_schedular is not None:
         lr_schedular = optim.lr_scheduler.MultiStepLR(
-            optimizer, args.lr_scheduler, gamma=0.1
+            optimizer, args.lr_schedular, gamma=0.1
         )
     else:
         lr_schedular = None

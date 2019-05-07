@@ -118,7 +118,7 @@ def main():
                 random_state=args.random_seed
             )
             if args.phase == 'train':
-                use_dat == train_df
+                use_dat = train_df
             else:
                 use_dat = valid_df
     else:
@@ -183,12 +183,15 @@ def main():
         enumerate(zip(use_dataloader, labels_preds, markers_preds))
     ):
         imgs = no_norm(imgs)
-        for i in range(args.batch_size):
-            img = imgs[i]
-            label = labels[i]
-            marker = markers[i]
-            label_pred = labels_pred[i]
-            marker_pred = markers_pred[i]
+        # for i in range(args.batch_size):
+        for i, (img, label, marker, label_pred, marker_pred) in enumerate(
+            zip(imgs, labels, markers, labels_pred, markers_pred)
+        ):
+            # img = imgs[i]
+            # label = labels[i]
+            # marker = markers[i]
+            # label_pred = labels_pred[i]
+            # marker_pred = markers_pred[i]
             img = to_pil(img)
             img = draw_rectangle(img, label.numpy(), marker.numpy())
             if label_pred.numel() == 0:
