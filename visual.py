@@ -1,4 +1,5 @@
 import os
+import platform
 
 import torch
 import argparse
@@ -39,7 +40,10 @@ def draw_rectangle(
             color = color_mapper[label]
         draw.rectangle(marker, outline=color, width=6)
     if fonts is not None:
-        font_type = ImageFont.truetype('calibri', size=50)
+        if platform.system() == 'Windows':
+            font_type = ImageFont.truetype('calibri', size=50)
+        else:
+            font_type = ImageFont.truetype('arial.ttf', size=50)
         for label, marker, font in zip(labels, markers, fonts):
             color = color_mapper[label]
             draw.text(

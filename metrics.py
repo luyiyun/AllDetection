@@ -193,14 +193,11 @@ def test():
     if platform.system() == 'Windows':
         root_dir = 'E:/Python/AllDetection/label_boxes'
     else:
-        root_dir = '/home/dl/deeplearning_img/AllDet/label_boxes'
-    img_label_dir_pair = []
-    for d in os.listdir(root_dir):
-        img_dir = os.path.join(root_dir, d)
-        label_dir = os.path.join(root_dir, d, 'outputs')
-        img_label_dir_pair.append((img_dir, label_dir))
-
-    data_df = get_data_df(img_label_dir_pair, check=True)
+        root_dir = '/home/dl/deeplearning_img/Detection/ALL'
+    data_df, label_set = get_data_df(
+        root_dir, check=False, check_labels=True)
+    label_mapper = {l: i for i, l in enumerate(label_set)}
+    print(label_mapper)
     if sys.argv[1] == 'simulate_good':
         score_ratio = (0.4, 1.0)
         loc_ratio = (0.8, 1.2)
@@ -210,7 +207,7 @@ def test():
     elif sys.argv[1] == 'simulate_bad_loc':
         score_ratio = (0.4, 1.0)
         loc_ratio = (0.4, 2.0)
-    dataset = ColabeledDataset(data_df, input_size=(1200, 1920))
+    dataset = ColabeledDataset(data_df, input_size=(600, 960))
     imgs = []
     true_labels = []
     true_markers = []
