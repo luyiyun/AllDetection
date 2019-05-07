@@ -7,11 +7,46 @@ import torchvision.models as models
 import torchvision.transforms as transforms
 from sklearn.model_selection import train_test_split
 from progressbar import progressbar as pb
+from PIL import ImageDraw, ImageFont
 
-from data_loader import get_data_df, AllDetectionDataset, draw_rectangle
+from data_loader import get_data_df, ColabeledDataset
 from net import RetinaNet
 import transfers
 from train import test
+
+
+def draw_rectangle(
+    img, labels, markers, color_mapper=None, fonts=None
+):
+    '''
+    在img上画上标记框，如果labels是概率，则会计算其最大的概率，根据最大的列标
+        来表颜色，并把最大的概率写在上面；
+    args:
+        img，PIL的Image对象；
+        labels，iterable，是objects的标签，迭代得到的是list；
+        markers，iterable，是objects的boxes的loc，迭代得到的是list；
+        color_mapper，dict，keys是markers，values是用于draw的颜色；
+        fonts，iterable，是要写在预测框上的文字，如果是None则不加这个，
+            迭代得到的是list；
+    returns:
+        img，PIL的Image对象，画上标记框的image；
+    '''
+    draw = ImageDraw.Draw(img)
+    for label, marker in zip(labels, markers):
+        if color_mapper is None:
+            color = 'red'
+        else:
+            color = color_mapper[label]
+        draw.rectangle(marker, outline=color, width=6)
+    if fonts is not None:
+        font_type = ImageFont.truetype('calibri', size=50)
+        for label, marker, font in zip(labels, markers, fonts):
+            color = color_mapper[label]
+            draw.text(
+                marker[:2], str(font), fill=color,
+                font=font_type
+            )
+    return img
 
 
 class NoNormalize:
@@ -97,12 +132,10 @@ def main():
     else:
         raise ValueError('input_size must be one of tuple, list or None')
 
-    img_label_dir_pair = []
-    for d in os.listdir(args.root_dir):
-        img_dir = os.path.join(args.root_dir, d)
-        label_dir = os.path.join(args.root_dir, d, 'outputs')
-        img_label_dir_pair.append((img_dir, label_dir))
-    data_df = get_data_df(img_label_dir_pair, check=False)
+    data_df, label_set = get_data_df(
+        args.root_dir, check=False, check_labels=True)
+    label_mapper = {l: i for i, l in enumerate(label_set)}
+    print(label_mapper)
 
     # 数据集分割
     if args.phase in ['train', 'valid', 'test']:
@@ -147,9 +180,10 @@ def main():
     else:
         y_input_size = input_size
     y_encoder_args = {'input_size': y_input_size, 'ps': args.ps}
-    use_data = AllDetectionDataset(
+    use_data = ColabeledDataset(
         use_dat, transfer=test_transfers, y_encoder_mode='object',
-        **y_encoder_args)
+        label_mapper=label_mapper, **y_encoder_args
+    )
     use_dataloader = DataLoader(
         use_data, batch_size=args.batch_size, shuffle=False,
         num_workers=args.n_jobs, collate_fn=use_data.collate_fn)
@@ -193,7 +227,7 @@ def main():
             # label_pred = labels_pred[i]
             # marker_pred = markers_pred[i]
             img = to_pil(img)
-            img = draw_rectangle(img, label.numpy(), marker.numpy())
+            img = draw_rectangle(img.tolist(), label.tolist(), marker.tolist())
             if label_pred.numel() == 0:
                 img.save(
                     os.path.join(

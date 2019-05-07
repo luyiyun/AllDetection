@@ -48,10 +48,10 @@ class YEncoder:
         # tensor的计算的时候，如果分子是int，那么进行除法的时候实际上使用的
         #   是整除，所以为了避免在之后计算特征图大小（而这里是ceil）的时候出错，
         #   这里先对其float变换一下
-        if input_size is None:
-            input_size = (1920, 1200)
-        elif isinstance(input_size, int):
-            input_size = (1920*input_size/1200, input_size)
+        if not isinstance(input_size, (tuple, list)):
+            raise ValueError('TCT的input_size不是1920x1200，所以不能是None')
+        if len(input_size) != 2:
+            raise ValueError('TCT的input_size不是1920x1200，所以不能是None')
         self.input_size = torch.tensor(input_size, dtype=torch.float)
         self.num_anchor_per_cell = len(aspect_ratios) * len(scale_ratios)
         self.anchor_wh = self._get_anchor_wh()
@@ -82,8 +82,8 @@ class YEncoder:
             input_size = self.input_size
             anchor_boxes = self.anchor_boxes
         else:
-            if isinstance(input_size, int):
-                input_size = (1920*input_size/1200, input_size)
+            if len(input_size) != 2:
+                raise ValueError('TCT的input_size不是1920x1200，所以不能是None')
             input_size = torch.tensor(input_size, dtype=torch.float)
             anchor_boxes = self._get_anchor_boxes(input_size)
         boxes = change_box_order(boxes, 'xyxy2xywh')
@@ -138,8 +138,8 @@ class YEncoder:
             anchor_boxes = self.anchor_boxes
             anchor_boxes = anchor_boxes.to(device)
         else:
-            if isinstance(input_size, int):
-                input_size = (1920*input_size/1200, input_size)
+            if len(input_size) != 2:
+                raise ValueError('TCT的input_size不是1920x1200，所以不能是None')
             input_size = torch.tensor(input_size, dtype=torch.float)
             anchor_boxes = self._get_anchor_boxes(input_size)
             anchor_boxes = anchor_boxes.to(device)

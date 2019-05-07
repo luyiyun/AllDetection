@@ -1,6 +1,7 @@
 import os
 import copy
 import json
+import platform
 from itertools import chain
 
 import numpy as np
@@ -14,11 +15,17 @@ from sklearn.model_selection import train_test_split
 import argparse
 import progressbar as pb
 
-from data_loader import get_data_df, AllDetectionDataset
+from data_loader import get_data_df, ColabeledDataset
 import transfers
 from net import RetinaNet
 from losses import FocalLoss
 from metrics import mAP
+
+
+def default_rd():
+    if platform.system() == 'Windows':
+        return 'E:/Python/AllDetection/label_boxes'
+    return '/home/dl/deeplearning_img/AllDet/label_boxes'
 
 
 class History:
@@ -380,11 +387,10 @@ def main():
         help='随机种子数，默认是1234'
     )
     parser.add_argument(
-        '-rd', '--root_dir',
-        default='/home/dl/deeplearning_img/AllDet/label_boxes',
+        '-rd', '--root_dir', default=default_rd(),
         help=(
-            '数据集所在的根目录，其内部是子文件夹储存图片, 这里默认是'
-            '/home/dl/deeplearning_img/AllDet/label_boxes')
+            '数据集所在的根目录，其内部是子文件夹储存图片, 这里是'
+            '和system的类型有关，默认是ALL的数据')
     )
     parser.add_argument(
         '--bn_freeze', action='store_true',
@@ -456,13 +462,10 @@ def main():
     else:
         raise ValueError('input_size must be one of tuple, list or None')
     # 读取数据根目录，构建data frame
-    img_label_dir_pair = []
-    for d in os.listdir(args.root_dir):
-        img_dir = os.path.join(args.root_dir, d)
-        label_dir = os.path.join(args.root_dir, d, 'outputs')
-        img_label_dir_pair.append((img_dir, label_dir))
-    data_df = get_data_df(img_label_dir_pair, check=False)
-
+    data_df, label_set = get_data_df(
+        args.root_dir, check=False, check_labels=True)
+    label_mapper = {l: i for i, l in enumerate(label_set)}
+    print(label_mapper)
     # 数据集分割
     trainval_df, test_df = train_test_split(
         data_df, test_size=0.1, shuffle=True, random_state=args.random_seed)
@@ -509,17 +512,17 @@ def main():
         y_input_size = input_size
     y_encoder_args = {'input_size': y_input_size, 'ps': args.ps}
     datasets = {
-        'train': AllDetectionDataset(
+        'train': ColabeledDataset(
             train_df, transfer=train_transfers, y_encoder_mode='anchor',
-            **y_encoder_args
+            label_mapper=label_mapper, **y_encoder_args
         ),
-        'valid': AllDetectionDataset(
-            valid_df, transfer=test_transfers,
+        'valid': ColabeledDataset(
+            valid_df, transfer=test_transfers, label_mapper=label_mapper,
             y_encoder_mode='all', **y_encoder_args
         ),
-        'test': AllDetectionDataset(
+        'test': ColabeledDataset(
             test_df, transfer=test_transfers, y_encoder_mode='all',
-            **y_encoder_args
+            label_mapper=label_mapper, **y_encoder_args
         )
     }
     dataloaders = {
