@@ -25,7 +25,7 @@ from metrics import mAP
 def default_rd():
     if platform.system() == 'Windows':
         return 'E:/Python/AllDetection/label_boxes'
-    return '/home/dl/deeplearning_img/AllDet/label_boxes'
+    return '/home/dl/deeplearning_img/Detection/ALL'
 
 
 class History:
@@ -363,8 +363,8 @@ def main():
         'save', default='exam', nargs='?',
         help='保存的本次训练的文件夹的名称，默认是exam')
     parser.add_argument(
-        '-sr', '--save_root', default='./results',
-        help='结果保存的根目录，默认是./results'
+        '-sr', '--save_root', default='./ALLresults',
+        help='结果保存的根目录，默认是./ALLresults'
     )
     parser.add_argument(
         '-bs', '--batch_size', default=2, type=int, help='batch size，默认是2')
@@ -375,7 +375,9 @@ def main():
         help=(
             '模型接受的输入图片的大小，如果指定了1个，则此为短边会resize到的大小'
             '，在此期间会保证图片的宽高比，如果指定两个，则分别是高和宽，'
-            '默认是None，即不进行resize')
+            '默认是None，即不进行resize\n'
+            '因为增加了对于TCT的支持，这里不再能够使用int和None，必须指定2个'
+        )
     )
     parser.add_argument(
         '-lr', '--learning_rate', type=float, default=5e-4,
