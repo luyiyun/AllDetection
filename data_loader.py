@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 import pandas as pd
 import torch
 import xml.etree.ElementTree as ET
@@ -10,43 +11,113 @@ from torch.utils.data.dataloader import default_collate
 from data_encoder import YEncoder
 
 
+'''
+读取xml的数据
+'''
+
+
+def parse_pascal(root):
+    ''' 用于解析pascal格式的xml '''
+    position_tag = ['xmin', 'ymin', 'xmax', 'ymax']
+    # 看图片是否存在一个object element，如果不存在则返回空的列表，表示该图片
+    #   中没有对象（即没有进行标记）
+    obj1 = root.find('object')
+    if obj1 is not None:
+        labels = []
+        positions = []
+        for element in root.iter('object'):
+            label = element.findtext('name')
+            bndbox = element.find('bndbox')
+            position = [int(bndbox.findtext(tag)) for tag in position_tag]
+            labels.append(label)
+            positions.append(position)
+        return labels, positions
+    return [], []
+
+
+def parse_xml(root):
+    ''' 用于解析xml格式的xml '''
+    position_tag = ['xmin', 'ymin', 'xmax', 'ymax']
+    labeled = root.findtext('labeled')
+    if labeled == 'true':
+        labels = []
+        positions = []
+        for element in root.iter('item'):
+            label = element.findtext('name')
+            bndbox = element.find('bndbox')
+            position = [int(bndbox.findtext(tag)) for tag in position_tag]
+            labels.append(label)
+            positions.append(position)
+        return labels, positions
+    return [], []
+
+
+def parse_size(root):
+    ''' 得到xml文件中的图片大小信息 '''
+    element = root.find('size')
+    w = int(element.findtext('width'))
+    h = int(element.findtext('height'))
+    return w, h
+
+
 def xml_to_markers(
-    file_path, label_correct={'ASC_H': 'ASC-H', 'ASC_US': 'ASC-US'}
+    file_path, label_correct={'ASC_H': 'ASC-H', 'ASC_US': 'ASC-US'},
+    size=None, wh_min=None
 ):
     '''
     从xml文件中读取标签和位置信息，这一个xml文件是对一张图片的标记信息；
     args:
         file_path，xml文件的路径；
         label_correct，有些标签标错了，比如下划线和-不分，这里进行纠正；
+        size，有些xml中会存在超出图像边界的标记框，这里提供的size可以用于裁剪，
+            如果是None，则需要从xml文件中读取；
+        wh_min，用于将低于此的标记框过滤掉，这些是人失误画的；
     returns:
         labels，list，每个元素是这一张图片所有的objs的标签，字符串；
         postitions，list，每个元素是一个4-list，为xyxy格式，int；
     '''
-    postition_tag = ['xmin', 'ymin', 'xmax', 'ymax']
     et = ET.parse(file_path)
     root = et.getroot()
-    labels = []
-    postitions = []
-    for element in root.iter('object'):
-        label = element.findtext('name')
-        bndbox = element.find('bndbox')
-        position = [int(bndbox.findtext(tag)) for tag in postition_tag]
-        if label in label_correct.keys():
-            label = label_correct[label]
-        labels.append(label)
-        postitions.append(position)
-    return labels, postitions
+    # 根据root node的tag来判断是哪种类型的xml，并进行读取
+    if root.tag == 'doc':
+        labels, positions = parse_xml(root)
+    elif root.tag == 'annotation':
+        labels, positions = parse_pascal(root)
+    # 如果没有object，则直接返回空列表
+    if len(labels) == 0:
+        return labels, positions
+    # 根据图片的size对框的大小进行截断，防止出现超出图像边缘的情况出现
+    if size is None:
+        w, h = parse_size(root)
+    else:
+        w, h = size
+    positions = np.array(positions)
+    positions[:, :2] = np.maximum(positions[:, :2], 0)
+    positions[:, 2] = np.minimum(positions[:, 2], w)
+    positions[:, 3] = np.minimum(positions[:, 3], h)
+    # 根据给定的wh_min，将w或h小于此的框删除
+    if wh_min is not None:
+        wh = positions[:, 2:] - positions[:, :2]
+        remain_ = (wh > wh_min).all(axis=1)
+        labels = np.array(labels)[remain_]
+        positions = positions[remain_]
+        labels = labels.tolist()
+    positions = positions.tolist()
+    # 如果有label correct，则进行更正
+    if label_correct is not None:
+        new_labels = []
+        for l in labels:
+            if l in label_correct.keys():
+                new_labels.append(label_correct[l])
+            else:
+                new_labels.append(l)
+        labels = new_labels
+    return labels, positions
 
 
-def pil_loader(img_f):
-    '''
-    使用PIL来读取图像
-    args:
-        img_f，图像文件的路径；
-    returns:
-        Image，返回的是PIL的Image对象；
-    '''
-    return Image.open(img_f)
+'''
+得到每张图片的路径及其对应的xml文件的路径
+'''
 
 
 def _check(img_fs, xml_fs, img_dir):
@@ -69,6 +140,40 @@ def _check(img_fs, xml_fs, img_dir):
             (img_dir, str(symmetric_difference)))
 
 
+class LabelChecker:
+    '''
+    用于检查这个img的label并进行收集
+    '''
+    def __init__(self, collect=False, drop_nonobjects=True):
+        '''
+        args:
+            collect: 是否收集所有的label；
+            drop_nonobjects: 是否将没有object的img去掉；
+        '''
+        self.collect = collect
+        self.drop_nonobjects = drop_nonobjects
+        self.imgfs = []
+        self.xmlfs = []
+        self.labels_set = set()
+
+    def check(self, img, xml):
+        '''
+        args:
+            img, img的路径；
+            xml, xml的路径;
+        '''
+        labels, markers = xml_to_markers(xml)
+        if len(labels) > 0:
+            # 是否收集所有的类别
+            if self.collect:
+                self.labels_set = self.labels_set.union(set(labels))
+            self.imgfs.append(img)
+            self.xmlfs.append(xml)
+        elif not self.drop_nonobjects:
+            self.imgfs.append(img)
+            self.xmlfs.append(xml)
+
+
 def get_data_df(
     root_dir, check=False, drop_nonobjects=True, img_type=['jpg', 'png'],
     check_labels=False,
@@ -85,9 +190,8 @@ def get_data_df(
         set，所有类别组成的set；
         df，2-columns的df；
     '''
-    img_files = []
-    xml_files = []
-    labels_set = set()
+    label_checker = LabelChecker(
+        collect=check_labels, drop_nonobjects=drop_nonobjects)
     # 遍历root_dir下的所有子文件下的文件，如果该子文件夹存在outputs文件夹，
     #   则认为此文件夹内正是保存图片的文件夹，将其中的jpg文件路径保存到list
     #   另外把该jpg文件对应的xml文件路径进行保存
@@ -108,25 +212,24 @@ def get_data_df(
             for f in files:
                 if f.endswith(tuple(img_type)):
                     xml_f = os.path.join(d, 'outputs', f[:-4]+'.xml')
-                    if drop_nonobjects or check_labels:
-                        labels, markers = xml_to_markers(xml_f)
-                        # 是否收集所有的类别
-                        if check_labels:
-                            labels_set = labels_set.union(set(labels))
-                        # 是否要把没有标记的样本丢弃
-                        if drop_nonobjects:
-                            if len(labels) > 0:
-                                img_files.append(os.path.join(d, f))
-                                xml_files.append(xml_f)
-                        else:
-                            img_files.append(os.path.join(d, f))
-                            xml_files.append(xml_f)
-                    else:
-                        img_files.append(os.path.join(d, f))
-                        xml_files.append(xml_f)
+                    img_f = os.path.join(d, f)
+                    label_checker.check(img_f, xml_f)
+    df = pd.DataFrame(
+        {'img': label_checker.imgfs, 'label': label_checker.xmlfs})
     if check_labels:
-        return pd.DataFrame({'img': img_files, 'label': xml_files}), labels_set
-    return pd.DataFrame({'img': img_files, 'label': xml_files})
+        return df, label_checker.labels_set
+    return df
+
+
+def pil_loader(img_f):
+    '''
+    使用PIL来读取图像
+    args:
+        img_f，图像文件的路径；
+    returns:
+        Image，返回的是PIL的Image对象；
+    '''
+    return Image.open(img_f)
 
 
 class ColabeledDataset(Dataset):
@@ -135,7 +238,7 @@ class ColabeledDataset(Dataset):
     '''
     def __init__(
         self, df, img_loader=pil_loader, label_mapper={'正常': 0, '异常': 1},
-        transfer=None, y_encoder_mode='object', **kwargs
+        transfer=None, y_encoder_mode='object', xml_parse={}, **kwargs
     ):
         '''
         args:
@@ -148,6 +251,7 @@ class ColabeledDataset(Dataset):
             y_encoder_mode：如果是'anchor'，则输出anchor偏移量和标签，如果是
                 'object'，则输出obj的xyxy boxes和标签，如果是'all'，则两者都会输
                 出，用于计算mAP；
+            xml_parse：dict，用于传递给xml_to_markers函数的参数；
             kwargs：传入到YEncoder中的参数
         '''
         assert y_encoder_mode in ['all', 'object', 'anchor']
@@ -156,6 +260,7 @@ class ColabeledDataset(Dataset):
         self.transfer = transfer
         self.df = df
         self.y_encoder_mode = y_encoder_mode
+        self.xml_parse = xml_parse
         # 这里隐式的创建YEncoder来对obj进行关于anchor的编码
         self.y_encoder = YEncoder(**kwargs)
 
@@ -172,7 +277,7 @@ class ColabeledDataset(Dataset):
         '''
         img_f, label_f = self.df.iloc[idx, :].values
         img = self.img_loader(img_f)
-        labels, markers = xml_to_markers(label_f)
+        labels, markers = xml_to_markers(label_f, **self.xml_parse)
         if self.label_mapper is not None:
             labels = torch.tensor([self.label_mapper[l] for l in labels])
             markers = torch.tensor(markers, dtype=torch.float)

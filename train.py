@@ -50,9 +50,6 @@ class History:
             } for _ in range(best_num)
         ]
         self.best_keys = set(self.best[0].keys())
-        # self.best_keys_alt = copy.deepcopy(self.best_keys)
-        # self.best_keys_alt.remove('model_wts')
-        # self.best_keys_alt.add('model')
 
     def update_best(self, **kwargs):
         '''
@@ -124,15 +121,6 @@ def train(
         （另外，实际上输入的net会发生改变，成为在训练过程中valid上最好的net）
         test_loss, test_mAP，如果有dataloaders中还有test，则会返回；
     '''
-    # 训练开始的时候需要初始化的一些值
-    # history = {
-    #     'loss': [], 'cls_loss': [], 'loc_loss': [],
-    #     'val_loss': [], 'val_cls_loss': [], 'val_loc_loss': [],
-    #     'mAP': []
-    # }
-    # best_loss = float('inf')
-    # best_map = 0.
-    # best_model_wts = copy.deepcopy(net.state_dict())
     for e in range(epoch):
         if 'valid' in dataloaders.keys():
             phases = ['train', 'valid']
@@ -360,7 +348,8 @@ def test(
 
 
 def main():
-    # 命令行参数设置
+
+    # --------------------------- 命令行参数设置 ---------------------------
     parser = argparse.ArgumentParser()
     parser.add_argument(
         'save', default='exam', nargs='?',
@@ -374,12 +363,10 @@ def main():
     parser.add_argument(
         '-nj', '--n_jobs', default=6, type=int, help='多核并行的核数，默认是6')
     parser.add_argument(
-        '-is', '--input_size', default=None, type=int, nargs='+',
+        '-is', '--input_size', default=(960, 600), type=int, nargs=2,
         help=(
-            '模型接受的输入图片的大小，如果指定了1个，则此为短边会resize到的大小'
-            '，在此期间会保证图片的宽高比，如果指定两个，则分别是高和宽，'
-            '默认是None，即不进行resize\n'
-            '因为增加了对于TCT的支持，这里不再能够使用int和None，必须指定2个'
+            '默认是960, 600（是用于All的detection），因为增加了对于TCT的支持，'
+            '这里不再能够使用int和None，必须指定2个'
         )
     )
     parser.add_argument(
@@ -455,21 +442,32 @@ def main():
         '-o', '--optimizer', default='adam',
         help="使用的迭代器，默认是adam"
     )
+    parser.add_argument(
+        '-nt', '--nms_thre', default=0.3, type=float,
+        help="进行nms时使用的阈值，默认是0.3"
+    )
+    parser.add_argument(
+        '--wh_min', default=None, type=int,
+        help="默认是None，用于xml读取，过滤错误的框"
+    )
+    parser.add_argument(
+        '--custom_label_mapper', action='store_true',
+        help="如果使用此参数，将把得到的标签列出，并自己给出起数字标签是什么"
+    )
     args = parser.parse_args()
-    # 需要对input_size进行比较复杂的处理
-    if isinstance(args.input_size, (tuple, list)):
-        if len(args.input_size) == 1:
-            input_size = args.input_size[0]
-        else:
-            input_size = list(args.input_size)
-    elif args.input_size is None:
-        input_size = None
-    else:
-        raise ValueError('input_size must be one of tuple, list or None')
-    # 读取数据根目录，构建data frame
+
+    # --------------------------- 读取文件名称 ---------------------------
     data_df, label_set = get_data_df(
         args.root_dir, check=False, check_labels=True)
-    label_mapper = {l: i for i, l in enumerate(label_set)}
+    # 这是得到的objects的总类数，这样可以对ALL和TCT使用一样的代码
+    if args.custom_label_mapper:
+        label_mapper = {}
+        for l in label_mapper:
+            i = int(input('label--%s的数字标签是:' % l))
+            label_mapper[l] = i
+    else:
+        label_mapper = {l: i for i, l in enumerate(label_set)}
+    num_classes = len(set(label_mapper.values()))
     print(label_mapper)
     # 数据集分割
     trainval_df, test_df = train_test_split(
@@ -478,7 +476,8 @@ def main():
         trainval_df, test_size=1/9, shuffle=True, random_state=args.random_seed
     )
 
-    # 数据集建立
+    # --------------------------- 数据集建立 ---------------------------
+    # 数据预处理的transforms
     if args.no_normalize:
         img_transfer = transforms.Compose([
             transforms.ToTensor(),
@@ -494,40 +493,40 @@ def main():
         transfers.RandomFlipTopBottom(),
     ])
     # 注意对于PIL，其输入大小时是w,h的格式
-    if input_size is None:
-        train_transfers = transforms.Compose([
-            data_augment, img_transfer
-        ])
-        test_transfers = img_transfer
-    else:
-        # 在PIL中，一般表示图像的两个空间维度时候使用w,h的顺序，但在pytorch中，
-        # 一般使用h,w的顺序，这里使用的Resize是pytorch的对象，所以其接受的是h x
-        # w的顺序
-        resize_transfer = transfers.Resize(input_size)
-        train_transfers = transforms.Compose([
-            data_augment, resize_transfer, img_transfer
-        ])
-        test_transfers = transforms.Compose([
-            resize_transfer, img_transfer
-        ])
+    # 在PIL中，一般表示图像的两个空间维度时候使用w,h的顺序，但在pytorch中，
+    # 一般使用h,w的顺序，这里使用的Resize是pytorch的对象，所以其接受的是h x
+    # w的顺序
+    # ！！！！但是这里我们使用的是自己编写的Resize函数这个函数使用的是Image
+    #   类的resize方法，其接受的也是w x h的输入，所以我们上面的命令行参数接
+    #   受的还是w h的顺序
+    resize_transfer = transfers.Resize(args.input_size)
+    train_transfers = transforms.Compose([
+        data_augment, resize_transfer, img_transfer
+    ])
+    test_transfers = transforms.Compose([
+        resize_transfer, img_transfer
+    ])
     # 这里实际上是送给YEncoder类的参数，需要指定为w x h
-    if isinstance(input_size, list):
-        y_input_size = input_size[::-1]
-    else:
-        y_input_size = input_size
-    y_encoder_args = {'input_size': y_input_size, 'ps': args.ps}
+    # 因为上面接受的是就是w h的顺序，则这里不用修改
+    y_encoder_args = {
+        'input_size': args.input_size, 'ps': args.ps,
+        'nms_thre': args.nms_thre}
+    # 这个命令行参数控制用于过滤掉错误的框
+    xml_parse = {}
+    if args.wh_min is not None:
+        xml_parse['wh_min'] = args.wh_min
     datasets = {
         'train': ColabeledDataset(
             train_df, transfer=train_transfers, y_encoder_mode='anchor',
-            label_mapper=label_mapper, **y_encoder_args
+            label_mapper=label_mapper, xml_parse=xml_parse, **y_encoder_args
         ),
         'valid': ColabeledDataset(
             valid_df, transfer=test_transfers, label_mapper=label_mapper,
-            y_encoder_mode='all', **y_encoder_args
+            y_encoder_mode='all', xml_parse=xml_parse, **y_encoder_args
         ),
         'test': ColabeledDataset(
             test_df, transfer=test_transfers, y_encoder_mode='all',
-            label_mapper=label_mapper, **y_encoder_args
+            label_mapper=label_mapper, xml_parse=xml_parse, **y_encoder_args
         )
     }
     dataloaders = {
@@ -537,7 +536,7 @@ def main():
         for k, v in datasets.items()
     }
 
-    # 模型建立
+    # --------------------------- 网络模型建立 ---------------------------
     bb_dict = {
         'resnet50': models.resnet50,
         'resnet101': models.resnet101,
@@ -547,12 +546,14 @@ def main():
     net = RetinaNet(
         backbone=backbone, normal_init=args.normal_init,
         cls_bias_init=args.no_bias_init, ps=args.ps,
-        num_class=len(label_mapper)
+        num_class=num_classes
     )
     net.cuda()
+    # 是否把网络中的所有bn都固定不训练，自己的实践发现好像影响不大甚至这会降低
+    #   效果，所以虽然有命令行参数控制，但基本不用
     if args.bn_freeze:
-        net.freeze_bn()  # ???
-    criterion = FocalLoss(alpha=args.alpha, num_class=len(label_mapper))
+        net.freeze_bn()
+    criterion = FocalLoss(alpha=args.alpha, num_class=num_classes)
     if args.optimizer == 'sgd':
         optimizer = optim.SGD(
             net.parameters(), lr=args.learning_rate,
@@ -567,20 +568,19 @@ def main():
     else:
         lr_schedular = None
 
-    # 模型训练
+    # --------------------------- 模型训练 ---------------------------
     history, (test_loss, test_map) = train(
         net, criterion, optimizer, dataloaders, epoch=args.epoch,
         lr_schedular=lr_schedular, clip_norm=args.clip_norm,
-        num_class=len(label_mapper),
+        num_class=num_classes,
         history=History(
             args.best_num, args.best_metric, args.best_metric == 'loss')
     )
 
-    # 模型保存
+    # --------------------------- 模型和结果保存 ---------------------------
     save_dir = os.path.join(args.save_root, args.save)
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
-    # state_dict = copy.deepcopy(net.state_dict())
     torch.save(history.best, os.path.join(save_dir, 'model.pth'))
 
     test_res = {

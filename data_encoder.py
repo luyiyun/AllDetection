@@ -18,7 +18,7 @@ class YEncoder:
         self, ps=[3, 4, 5, 6, 7],
         aspect_ratios=[1/2., 2/1., 1/1.],
         scale_ratios=[1., pow(2, 1/3.), pow(2, 2/3.)],
-        iou_thre=0.5, ignore_thres=(0.4, 0.5), cls_thre=0.5, nms_thre=0.5,
+        iou_thre=0.5, ignore_thres=(0.4, 0.5), cls_thre=0.5, nms_thre=0.3,
         input_size=None
     ):
         '''
@@ -153,6 +153,10 @@ class YEncoder:
         xy = loc_xy * anchor_boxes[..., 2:] + anchor_boxes[..., :2]
         wh = loc_wh.exp() * anchor_boxes[..., 2:]
         boxes = torch.cat([xy - wh / 2, xy + wh / 2], 2)  # xyxy format
+        # 发现有许多的预测框超出图像，这里进行一下限制，防止干扰计算IoU
+        boxes[..., :2] = boxes[..., :2].clamp(min=0.)
+        boxes[..., 2] = boxes[..., 2].clamp(max=input_size[0].item())
+        boxes[..., 3] = boxes[..., 3].clamp(max=input_size[1].item())
         # 将preds进行sigmoid，变成概率，并去除那些得分（最大）比较低的框
         cls_preds = cls_preds.sigmoid()
         score, labels = cls_preds.max(2)
@@ -170,6 +174,8 @@ class YEncoder:
         # 经过nms后，每张图片得到的预测框的数量是不一样的，所以无法将其都
         #   stack到一个tensor中，因为预测框的数量要作为dim=1来存在，只能
         #   使用list来保存
+        # ！！这里进行了修改，不会再返回所有类的score，而是只返回预测类的score
+        #   和预测的类
         return result_score, result_boxes
 
     def _get_anchor_wh(self):
@@ -267,8 +273,12 @@ def test():
         '-tk', '--top_k', default=10, type=int,
         help='当使用show_encode的时候，只显示IoU最大的几个anchor boxes'
     )
+    parser.add_argument(
+        '-ps', default=[3, 4, 5, 6, 7], type=int, nargs='+',
+        help='使用FPN中的哪些特征图来构建anchors，默认是p3-p7'
+    )
     args = parser.parse_args()
-    y_encoder = YEncoder(input_size=args.input_size, ps=[3, 4, 5])
+    y_encoder = YEncoder(input_size=args.input_size, ps=args.ps)
     if args.mode == 'show_wh':
         cen = torch.tensor(args.input_size, dtype=torch.float) / 2
         lt = cen - y_encoder.anchor_wh / 2

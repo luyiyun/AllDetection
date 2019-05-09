@@ -16,8 +16,23 @@ import transfers
 from train import test
 
 
+TrueColorList = [
+    [255, 255, 255],
+    [0, 0, 255],
+    [0, 255, 0],
+    [255, 0, 0],
+]
+PredColorList = [
+    [128, 128, 128],
+    [0, 0, 128],
+    [0, 128, 0],
+    [128, 0, 0]
+]
+
+
 def draw_rectangle(
-    img, labels, markers, color_mapper=None, fonts=None
+    img, labels, markers, color_mapper=None, fonts=None, width=4,
+    size=40
 ):
     '''
     在img上画上标记框，如果labels是概率，则会计算其最大的概率，根据最大的列标
@@ -38,12 +53,12 @@ def draw_rectangle(
             color = 'red'
         else:
             color = color_mapper[label]
-        draw.rectangle(marker, outline=color, width=6)
+        draw.rectangle(marker, outline=color, width=width)
     if fonts is not None:
         if platform.system() == 'Windows':
-            font_type = ImageFont.truetype('calibri', size=50)
+            font_type = ImageFont.truetype('calibri', size=size)
         else:
-            font_type = ImageFont.truetype('arial.ttf', size=50)
+            font_type = ImageFont.truetype('arial.ttf', size=size)
         for label, marker, font in zip(labels, markers, fonts):
             color = color_mapper[label]
             draw.text(
@@ -66,6 +81,8 @@ class NoNormalize:
 
 
 def main():
+    from train import default_rd
+    # --------------------------- 命令行参数设置 ---------------------------
     parser = argparse.ArgumentParser()
     parser.add_argument(
         'model', help='model 所在的文件夹'
@@ -75,22 +92,21 @@ def main():
     parser.add_argument(
         '-nj', '--n_jobs', default=6, type=int, help='多核并行的核数，默认是6')
     parser.add_argument(
-        '-is', '--input_size', default=None, type=int, nargs='+',
+        '-is', '--input_size', default=(960, 600), type=int, nargs=2,
         help=(
-            '模型接受的输入图片的大小，如果指定了1个，则此为短边会resize到的大小'
-            '，在此期间会保证图片的宽高比，如果指定两个，则分别是高和宽，'
-            '默认是None，即不进行resize')
+            '默认是960, 600（是用于All的detection），因为增加了对于TCT的支持，'
+            '这里不再能够使用int和None，必须指定2个'
+        )
     )
     parser.add_argument(
         '-rs', '--random_seed', default=1234, type=int,
         help='随机种子数，默认是1234'
     )
     parser.add_argument(
-        '-rd', '--root_dir',
-        default='/home/dl/deeplearning_img/AllDet/label_boxes',
+        '-rd', '--root_dir', default=default_rd(),
         help=(
-            '数据集所在的根目录，其内部是子文件夹储存图片, 这里默认是'
-            '/home/dl/deeplearning_img/AllDet/label_boxes')
+            '数据集所在的根目录，其内部是子文件夹储存图片, 这里是'
+            '和system的类型有关，默认是ALL的数据')
     )
     parser.add_argument(
         '--no_normalize', action='store_false',
@@ -117,30 +133,29 @@ def main():
         )
     )
     parser.add_argument(
-        '-sr', '--save_root', default='./results',
-        help='结果保存的根目录，默认是./results'
+        '-sr', '--save_root', default='./ALLresults',
+        help='结果保存的根目录，默认是./ALLresults'
     )
     parser.add_argument(
         '--top_k', default=0, type=int,
         help="使用的是排名第几的模型进行预测，默认是0"
     )
+    parser.add_argument(
+        '-lm', '--label_map', default=['异常', '正常'], nargs='+',
+        help="用于label mapper的list，按顺序起分别是0、1、...，默认是"
+        "['异常', '正常']，即用于ALL分类"
+    )
+    parser.add_argument(
+        '--wh_min', default=None, type=int,
+        help="默认是None，用于xml读取，过滤错误的框"
+    )
     args = parser.parse_args()
-    # 需要对input_size进行比较复杂的处理
-    if isinstance(args.input_size, (tuple, list)):
-        if len(args.input_size) == 1:
-            input_size = args.input_size[0]
-        else:
-            input_size = list(args.input_size)
-    elif args.input_size is None:
-        input_size = None
-    else:
-        raise ValueError('input_size must be one of tuple, list or None')
 
-    data_df, label_set = get_data_df(
-        args.root_dir, check=False, check_labels=True)
-    label_mapper = {l: i for i, l in enumerate(label_set)}
+    # --------------------------- 读取文件名称 ---------------------------
+    data_df = get_data_df(
+        args.root_dir, check=False, check_labels=False)
+    label_mapper = {l: i for i, l in enumerate(args.label_map)}
     print(label_mapper)
-
     # 数据集分割
     if args.phase in ['train', 'valid', 'test']:
         trainval_df, test_df = train_test_split(
@@ -161,43 +176,34 @@ def main():
     else:
         use_dat = data_df
 
-    # 数据集建立
+    # --------------------------- 数据集建立 ---------------------------
     img_transfer = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
     ])
     img_transfer = transfers.OnlyImage(img_transfer)
-    # 注意对于PIL，其输入大小时是w,h的格式
-    if input_size is None:
-        test_transfers = img_transfer
-    else:
-        # 在PIL中，一般表示图像的两个空间维度时候使用w,h的顺序，但在pytorch中，
-        # 一般使用h,w的顺序，这里使用的Resize是pytorch的对象，所以其接受的是h x
-        # w的顺序
-        resize_transfer = transfers.Resize(input_size)
-        test_transfers = transforms.Compose([
-            resize_transfer, img_transfer
-        ])
-    # 这里实际上是送给YEncoder类的参数，需要指定为w x h
-    if isinstance(input_size, list):
-        y_input_size = input_size[::-1]
-    else:
-        y_input_size = input_size
-    y_encoder_args = {'input_size': y_input_size, 'ps': args.ps}
+    resize_transfer = transfers.Resize(args.input_size)
+    test_transfers = transforms.Compose([
+        resize_transfer, img_transfer
+    ])
+    y_encoder_args = {'input_size': args.input_size, 'ps': args.ps}
+    xml_parse = {}
+    if args.wh_min is not None:
+        xml_parse['wh_min'] = args.wh_min
     use_data = ColabeledDataset(
         use_dat, transfer=test_transfers, y_encoder_mode='object',
-        label_mapper=label_mapper, **y_encoder_args
+        label_mapper=label_mapper, xml_parse=xml_parse, **y_encoder_args
     )
     use_dataloader = DataLoader(
         use_data, batch_size=args.batch_size, shuffle=False,
         num_workers=args.n_jobs, collate_fn=use_data.collate_fn)
 
-    # 载入训练好的模型
+    # --------------------------- 载入训练好的模型 ---------------------------
     if args.backbone == 'resnet50':
         backbone = models.resnet50
     elif args.backbone == 'resnet101':
         backbone = models.resnet101
-    net = RetinaNet(backbone=backbone, ps=args.ps)
+    net = RetinaNet(backbone=backbone, ps=args.ps, num_class=len(label_mapper))
     bests = torch.load(
         os.path.join(args.save_root, args.model, 'model.pth')
     )
@@ -205,33 +211,40 @@ def main():
     net.load_state_dict(state_dict)
     net.eval()
 
-    # 使用模型进行预测
-    (labels_preds, markers_preds), = test(
-        net.cuda(), use_dataloader, evaluate=False, predict=True,
-        device=torch.device('cuda:0')
+    # --------------------------- 预测 ---------------------------
+    (labels_preds, markers_preds), (APs, mAP_score) = test(
+        net.cuda(), use_dataloader, evaluate=True, predict=True,
+        device=torch.device('cuda:0'), num_class=len(label_mapper)
     )
+    for k, v in label_mapper.items():
+        print('%s的AP是%.4f' % (k, APs[v]))
+    print('mAP是%.4f' % mAP_score)
 
-    # ..
+    # --------------------------- 可视化 ---------------------------
+    # 创建文件夹保存结果
     save_dir = os.path.join(args.save_root, args.model, args.save_dir)
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
+    # 设置和图像预处理相反的操作，得到原始图像
     to_pil = transforms.ToPILImage()
     no_norm = NoNormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+    # 遍历结果，并将结果画在图上
+    true_color_mapper = {
+        i: tuple(TrueColorList[i]) for i in range(len(args.label_map))}
+    pred_color_mapper = {
+        i: tuple(PredColorList[i]) for i in range(len(args.label_map))}
     for j, ((imgs, labels, markers), labels_pred, markers_pred) in pb(
         enumerate(zip(use_dataloader, labels_preds, markers_preds))
     ):
         imgs = no_norm(imgs)
-        # for i in range(args.batch_size):
         for i, (img, label, marker, label_pred, marker_pred) in enumerate(
             zip(imgs, labels, markers, labels_pred, markers_pred)
         ):
-            # img = imgs[i]
-            # label = labels[i]
-            # marker = markers[i]
-            # label_pred = labels_pred[i]
-            # marker_pred = markers_pred[i]
             img = to_pil(img)
-            img = draw_rectangle(img.tolist(), label.tolist(), marker.tolist())
+            img = draw_rectangle(
+                img, label.tolist(), marker.tolist(),
+                color_mapper=true_color_mapper
+            )
             if label_pred.numel() == 0:
                 img.save(
                     os.path.join(
@@ -242,7 +255,7 @@ def main():
                 proba, idx_pred = label_pred.max(dim=1)
                 img = draw_rectangle(
                     img, idx_pred.cpu().numpy(), marker_pred.cpu().numpy(),
-                    color_mapper={0: 'blue', 1: 'yellow'},
+                    color_mapper=pred_color_mapper,
                     fonts=proba.cpu().numpy().round(4)
                 )
                 img.save(

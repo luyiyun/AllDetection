@@ -106,7 +106,7 @@ def box_nms(bboxes, scores, threshold=0.5, mode='union'):
     x2 = bboxes[:, 2]
     y2 = bboxes[:, 3]
 
-    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+    areas = (x2 - x1) * (y2 - y1)
     _, order = scores.sort(0, descending=True)
 
     keep = []
@@ -134,8 +134,8 @@ def box_nms(bboxes, scores, threshold=0.5, mode='union'):
         yy1 = y1[order[1:]].clamp(min=y1[i])
         xx2 = x2[order[1:]].clamp(max=x2[i])
         yy2 = y2[order[1:]].clamp(max=y2[i])
-        w = (xx2 - xx1 + 1).clamp(min=0)
-        h = (yy2 - yy1 + 1).clamp(min=0)
+        w = (xx2 - xx1).clamp(min=0)
+        h = (yy2 - yy1).clamp(min=0)
         inter = w * h
         if mode == 'union':
             ovr = inter / (areas[i] + areas[order[1:]] - inter)
