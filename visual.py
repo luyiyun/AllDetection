@@ -149,12 +149,27 @@ def main():
         '--wh_min', default=None, type=int,
         help="默认是None，用于xml读取，过滤错误的框"
     )
+    parser.add_argument(
+        '-nt', '--nms_thre', default=0.3, type=float,
+        help="进行nms时使用的阈值，默认是0.3"
+    )
+    parser.add_argument(
+        '--custom_label_mapper', action='store_true',
+        help="如果使用此参数，将把得到的标签列出，并自己给出起数字标签是什么"
+    )
     args = parser.parse_args()
 
     # --------------------------- 读取文件名称 ---------------------------
-    data_df = get_data_df(
-        args.root_dir, check=False, check_labels=False)
-    label_mapper = {l: i for i, l in enumerate(args.label_map)}
+    data_df, label_set = get_data_df(
+        args.root_dir, check=False, check_labels=True)
+    if args.custom_label_mapper:
+        label_mapper = {}
+        for l in label_set:
+            i = int(input('label--%s的数字标签是:' % l))
+            label_mapper[l] = i
+    else:
+        label_mapper = {l: i for i, l in enumerate(label_set)}
+    num_classes = len(set(label_mapper.values()))
     print(label_mapper)
     # 数据集分割
     if args.phase in ['train', 'valid', 'test']:
@@ -186,7 +201,9 @@ def main():
     test_transfers = transforms.Compose([
         resize_transfer, img_transfer
     ])
-    y_encoder_args = {'input_size': args.input_size, 'ps': args.ps}
+    y_encoder_args = {
+        'input_size': args.input_size, 'ps': args.ps,
+        'nms_thre': args.nms_thre}
     xml_parse = {}
     if args.wh_min is not None:
         xml_parse['wh_min'] = args.wh_min
@@ -203,7 +220,7 @@ def main():
         backbone = models.resnet50
     elif args.backbone == 'resnet101':
         backbone = models.resnet101
-    net = RetinaNet(backbone=backbone, ps=args.ps, num_class=len(label_mapper))
+    net = RetinaNet(backbone=backbone, ps=args.ps, num_class=num_classes)
     bests = torch.load(
         os.path.join(args.save_root, args.model, 'model.pth')
     )
@@ -214,7 +231,7 @@ def main():
     # --------------------------- 预测 ---------------------------
     (labels_preds, markers_preds), (APs, mAP_score) = test(
         net.cuda(), use_dataloader, evaluate=True, predict=True,
-        device=torch.device('cuda:0'), num_class=len(label_mapper)
+        device=torch.device('cuda:0'), num_class=num_classes
     )
     for k, v in label_mapper.items():
         print('%s的AP是%.4f' % (k, APs[v]))
@@ -230,9 +247,9 @@ def main():
     no_norm = NoNormalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
     # 遍历结果，并将结果画在图上
     true_color_mapper = {
-        i: tuple(TrueColorList[i]) for i in range(len(args.label_map))}
+        i: tuple(TrueColorList[i]) for i in range(num_classes)}
     pred_color_mapper = {
-        i: tuple(PredColorList[i]) for i in range(len(args.label_map))}
+        i: tuple(PredColorList[i]) for i in range(num_classes)}
     for j, ((imgs, labels, markers), labels_pred, markers_pred) in pb(
         enumerate(zip(use_dataloader, labels_preds, markers_preds))
     ):

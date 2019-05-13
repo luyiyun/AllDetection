@@ -28,6 +28,12 @@ def default_rd():
     return '/home/dl/deeplearning_img/Detection/ALL'
 
 
+def save_args(args, label_mapper, fname):
+    with open(fname, 'w') as f:
+        label_mapper.update(args.__dict__)
+        json.dump(label_mapper, f)
+
+
 class History:
     '''
     用于储存训练时期结果的对象，其中其有两个最重要的属性：history和best
@@ -462,7 +468,7 @@ def main():
     # 这是得到的objects的总类数，这样可以对ALL和TCT使用一样的代码
     if args.custom_label_mapper:
         label_mapper = {}
-        for l in label_mapper:
+        for l in label_set:
             i = int(input('label--%s的数字标签是:' % l))
             label_mapper[l] = i
     else:
@@ -592,6 +598,8 @@ def main():
 
     train_df = pd.DataFrame(history.history)
     train_df.to_csv(os.path.join(save_dir, 'train.csv'))
+
+    save_args(args, label_mapper, os.path.join(save_dir, 'args.json'))
 
 
 if __name__ == "__main__":
