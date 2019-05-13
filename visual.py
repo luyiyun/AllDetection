@@ -141,11 +141,6 @@ def main():
         help="使用的是排名第几的模型进行预测，默认是0"
     )
     parser.add_argument(
-        '-lm', '--label_map', default=['异常', '正常'], nargs='+',
-        help="用于label mapper的list，按顺序起分别是0、1、...，默认是"
-        "['异常', '正常']，即用于ALL分类"
-    )
-    parser.add_argument(
         '--wh_min', default=None, type=int,
         help="默认是None，用于xml读取，过滤错误的框"
     )
