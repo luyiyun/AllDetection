@@ -493,8 +493,20 @@ def main():
         img_transfer = transforms.Compose([
             transforms.ToTensor(),
         ])
+    # 数据增强
+    color_transfers = transforms.RandomApply(
+        [
+            transforms.ColorJitter(
+                brightness=(0.5, 1.5), saturation=(0.5, 1.5), hue=(-0.2, 0.2)
+            )
+        ],
+        0.5
+    )
+    aug_transfer = transfers.OnlyImage(
+        [transfers.RandomBlur(), color_transfers])
     img_transfer = transfers.OnlyImage(img_transfer)
     data_augment = transforms.Compose([
+        aug_transfer,
         transfers.RandomFlipLeftRight(),
         transfers.RandomFlipTopBottom(),
     ])

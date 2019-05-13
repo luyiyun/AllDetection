@@ -1,7 +1,8 @@
 import random
 
 import torch
-from PIL import Image
+from PIL import Image, ImageFilter
+from torchvision.transforms import Compose
 
 
 class YTransfer:
@@ -118,20 +119,41 @@ class RandomFlipTopBottom:
         return [img, labels, markers]
 
 
+class RandomBlur:
+    '''
+    随机进行模糊操作（github原代码中给blur设定了一个大小(5,5)，这里使用的PIL没
+        有这个参数）
+    '''
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, img):
+        if random.random() < self.p:
+            img = img.filter(ImageFilter.BLUR)
+        return img
+
+
 class OnlyImage:
     '''
-    使得torchvision中的transforms也能接受和输出3个对象，即img、labels和markers，
-    便于其和自定义的transforms的结合
+    将只应用在image上的transforms进行特殊的调整，这样这个transfoms输入和输出
+    都是image和labels了，便于和其他label也会发成变化的transforms对接
     '''
-    def __init__(self, transfer):
+    def __init__(self, transfers, return_tuple=False):
         '''
         args:
-            transfer：要变化的transforms
+            transfers: 多个transforms对象或一个transforms对象；
+            return_tuple: 如果是true，则返回的是tuple；
         '''
-        self.transfer = transfer
+        if isinstance(transfers, (tuple, list)):
+            self.transfers = Compose(transfers)
+        else:
+            self.transfers = transfers
+        self.return_tuple = return_tuple
 
-    def __call__(self, alls):
-        img, labels, markers = alls
-        img = self.transfer(img)
-        return [img, labels, markers]
-
+    def __call__(self, inpts):
+        img, others = inpts[0], inpts[1:]
+        img = self.transfers(img)
+        oupts = [img] + list(others)
+        if self.return_tuple:
+            return tuple(oupts)
+        return oupts
