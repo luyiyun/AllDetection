@@ -83,21 +83,28 @@ def mAP(
             t_s, t_c = t.max(dim=1)
             pred_score.append(t_s)
             pred_class.append(t_c)
-    all_scores = torch.cat(pred_score, dim=0)
-    all_classes = torch.cat(pred_class, dim=0)
     # 对每个类分别计算ap
     for c in range(num_class):
         # 创建ndarray来储存是否是一个true positive的预测
         tp = np.zeros((0,))
         # 记录这一类一共有多少个true objects，用于计算recall
         num_true_objs = 0.0
+        # 记录所有的已经变换了顺序的scores，用于之后计算recall和precision
+        all_scores_c_order = []
         for i in range(num_imgs):
-            # 得到一张图片中这一类的所有预测框
+            # 一张图片中属于此类的gtbb
             true_c_mask = true_cls[i] == c
-            num_true_objs += true_c_mask.sum()
-            pred_c_mask = pred_class[i] == c
+            num_true_objs += true_c_mask.sum()  # 统计总的true的数量来计算recall
             true_loc_i_c = true_loc[i][true_c_mask]
-            pred_loc_i_c = pred_loc[i][pred_c_mask]
+            # 一张图片中属于此类的预测boxes
+            pred_c_mask = pred_class[i] == c
+            # 对一张图片中的所有预测框根据起scores进行排序，以便在选择匹配的gtbb
+            #   时能够保证总是预测scores最大的匹配到gtbb，这里需要进行排序的有
+            #   score、classes和locs
+            pred_score_i_c, i_c_order = pred_score[i][pred_c_mask].sort(
+                dim=0, descending=True)
+            pred_loc_i_c = pred_loc[i][pred_c_mask][i_c_order]
+            all_scores_c_order.append(pred_score_i_c)
             # 用于记录已经匹配到的gtbb的序号，每张图片重新记录
             detected_true_boxes = []
             # 如果这个类的预测框数量为0，则此循环不会运行，fp和tp是长度为0的
@@ -133,8 +140,9 @@ def mAP(
         if num_true_objs == 0.0:
             aps.append(0.)
             continue
-        # 依据score进行排序
-        _, order = all_scores[all_classes == c].sort(dim=0, descending=True)
+        # 依据score进行再次进行总排序，计算每一类的recall、precision
+        _, order = torch.cat(all_scores_c_order, dim=0).sort(
+            dim=0, descending=True)
         order = order.cpu().numpy()
         tp = tp[order]
         fp = 1 - tp
